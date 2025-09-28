@@ -13,6 +13,7 @@ from .train_autoencoder import (
     MIEstimationCompressionConfig,
     prepare_input_autoencoder,
 )
+import math
 
 
 def normalize_data(x: torch.Tensor) -> torch.Tensor:
@@ -56,8 +57,8 @@ def estimate_mi_zx(
     with torch.no_grad():
         for data, _ in loader:
             data = data.to(device)  # noqa: PLW2901
-            forward_result = model(data, return_repr=True)
-            features.append(forward_result.representation)
+            out, repres = model(data, return_hidden=True)
+            features.append(repres)
     features = torch.cat(features, dim=0)
     z_compressed = PCA(n_components=mi_config.latent_dim).fit_transform(
         features.cpu().numpy(),
@@ -70,7 +71,9 @@ def estimate_mi_zx(
             "functional_params": {"k_neighbors": 5},
         },
     )
-    return mi_zx_estimator.fit_estimate(z_compressed, x_compressed)
+    return mi_zx_estimator.fit_estimate(z_compressed, x_compressed) * math.log2(
+        math.e,
+    )  # nats to bits
 
 
 def estimate_mi_zy(
@@ -91,8 +94,8 @@ def estimate_mi_zy(
     with torch.no_grad():
         for data, _ in loader:
             data = data.to(device)  # noqa: PLW2901
-            forward_result = model(data, return_repr=True)
-            features.append(forward_result.representation)
+            out, repres = model(data, return_hidden=True)
+            features.append(repres)
     features = torch.cat(features, dim=0)
     z_compressed = PCA(n_components=mi_config.latent_dim).fit_transform(
         features.cpu().numpy(),
@@ -106,4 +109,6 @@ def estimate_mi_zy(
             "functional_params": {"k_neighbors": 5},
         },
     )
-    return mi_zy_estimator.fit_estimate(z_compressed, targets)
+    return mi_zy_estimator.fit_estimate(z_compressed, targets) * math.log2(
+        math.e
+    )  # nats to bits

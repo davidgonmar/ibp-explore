@@ -138,3 +138,8 @@ a.py
 
 
 *.onnx
+
+*.pth
+
+/pruning_plots
+

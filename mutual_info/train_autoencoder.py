@@ -129,8 +129,7 @@ def prepare_input_autoencoder(
     device: torch.device,
 ) -> Autoencoder:
     input_ae_path = (
-        Path.home()
-        / "collapse-dynamics"
+        Path(".")
         / "saved_models"
         / "autoencoder"
         / f"{cfg.dataset.name}_{mi_config.num_epochs}_{mi_config.latent_dim}.pth"
