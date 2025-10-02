@@ -1,1 +1,1 @@
-ibp-explore
+This repository has the purpose of hosting different exploratory experiments related to the Information Bottleneck Principle. Those range from visualizing information estimates at different points in training to measuring MI after pruning networks.
