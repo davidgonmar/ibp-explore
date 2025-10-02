@@ -10,6 +10,9 @@ import os
 from torch.ao.pruning import WeightNormSparsifier
 from torchao.sparsity import WandaSparsifier
 import copy
+import numpy as np
+
+from sparse.taylor_prune import prune_taylor_unstructured
 
 BATCH_SIZE = 128
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -37,7 +40,6 @@ mnist_subset = torch.utils.data.Subset(
 
 
 def _wanda_sparsify(model, amount):
-
     sparse_config = []
     for fqn, mod in model.named_modules():
         if fqn in ("fc1", "fc2", "fc3") and isinstance(mod, torch.nn.Linear):
@@ -46,13 +48,31 @@ def _wanda_sparsify(model, amount):
         sparsity_level=amount,
     )
     sparsifier.prepare(model, sparse_config)
-    # run model through some data to compute importance scores
     loader = DataLoader(mnist_subset, batch_size=BATCH_SIZE, shuffle=False)
     for x, _ in loader:
         x = x.to(DEVICE)
         model(x)
     sparsifier.step()
     sparsifier.squash_mask()
+
+
+_ce_loss = torch.nn.CrossEntropyLoss()
+_taylor_loader = DataLoader(mnist_subset, batch_size=BATCH_SIZE, shuffle=False)
+
+
+def _taylor_unstructured_no_bias(model, _params_ignored, amount: float):
+    if amount <= 0.0:
+        return
+    prune_taylor_unstructured(
+        model=model,
+        dataloader=_taylor_loader,
+        loss_fn=_ce_loss,
+        sparsity=amount,
+        device=DEVICE,
+        num_batches=10,
+        forward_fn=None,
+        skip_modules=(),
+    )
 
 
 PRUNING_STRATEGIES = {
@@ -82,7 +102,14 @@ PRUNING_STRATEGIES = {
         ),
     ),
     "wanda_unstructured": lambda model, params, amount: _wanda_sparsify(model, amount),
+    "taylor_unstructured": _taylor_unstructured_no_bias,
 }
+
+keys_to_omit = (
+    []
+)  # "global_l1", "global_random", "layerwise_l1", "layerwise_random", "structured_l2_channels", "semi_structured_nm_weightnorm", "wanda_unstructured"]
+for key in keys_to_omit:
+    PRUNING_STRATEGIES.pop(key)
 
 
 def evaluate_accuracy(model, loader):
@@ -101,6 +128,49 @@ def estimate_IZY_and_IXZ(model, loader):
     return estimate_mi_zy(model, loader, DEVICE, mi_config=None), estimate_mi_zx(
         model, loader, DEVICE, cfg, mi_config=None
     )
+
+
+def error_breakdown_by_true_class(model, loader, num_classes=10):
+    """
+    For each true class c, compute how many mistakes came from class c.
+    Returns a dict with:
+      - errors_per_class: list[int], length C
+      - total_per_class:  list[int], length C
+      - total_errors:     int
+      - error_share:      list[float], length C (sums to 1.0 when there are errors)
+      - class_error_rate: list[float], errors_in_class / samples_in_class
+    """
+    model.eval()
+    total_per_class = torch.zeros(num_classes, dtype=torch.long)
+    errors_per_class = torch.zeros(num_classes, dtype=torch.long)
+
+    with torch.no_grad():
+        for x, y in loader:
+            x, y = x.to(DEVICE), y.to(DEVICE)
+            pred = model(x).argmax(dim=1)
+            wrong = pred != y
+            for c in range(num_classes):
+                yc = y == c
+                total_per_class[c] += yc.sum().item()
+                errors_per_class[c] += (yc & wrong).sum().item()
+
+    total_errors = int(errors_per_class.sum().item())
+    if total_errors > 0:
+        error_share = (errors_per_class.float() / total_errors).tolist()
+    else:
+        error_share = [0.0] * num_classes
+
+    class_error_rate = (
+        errors_per_class.float() / total_per_class.clamp_min(1).float()
+    ).tolist()
+
+    return {
+        "errors_per_class": [int(v) for v in errors_per_class.tolist()],
+        "total_per_class": [int(v) for v in total_per_class.tolist()],
+        "total_errors": total_errors,
+        "error_share": error_share,
+        "class_error_rate": class_error_rate,
+    }
 
 
 def main():
@@ -145,9 +215,11 @@ def main():
 
     all_results = {}
     for strategy_name, strategy_fn in PRUNING_STRATEGIES.items():
-        accs = []
-        izy_list = []
-        ixz_list = []
+        accs, izy_list, ixz_list = [], [], []
+        err_counts_list = []  # [len(ratios)] x [10]
+        err_shares_list = []  # [len(ratios)] x [10]
+        totals_per_class = None  # Will set at first ratio
+
         print(f"\n=== Pruning strategy: {strategy_name} ===")
         for ratio in ratios:
             # Deepcopy the base model for each pruning step
@@ -163,16 +235,31 @@ def main():
                 strategy_fn(model, parameters_to_prune, ratio)
 
             acc = evaluate_accuracy(model, test_loader)
+            breakdown = error_breakdown_by_true_class(
+                model, test_loader, num_classes=10
+            )
             I_ZY, I_XZ = estimate_IZY_and_IXZ(model, test_loader_mi)
+
+            if totals_per_class is None:
+                totals_per_class = breakdown["total_per_class"]  # same for all ratios
 
             accs.append(acc)
             izy_list.append(I_ZY)
             ixz_list.append(I_XZ)
+            err_counts_list.append(breakdown["errors_per_class"])
+            err_shares_list.append(breakdown["error_share"])
 
+            shares_pct = [f"{100*s:.1f}%" for s in breakdown["error_share"]]
+            shares_str = ", ".join(
+                [f"class {i}: {p}" for i, p in enumerate(shares_pct)]
+            )
             print(
                 f"Prune ratio: {ratio:.2f} | "
                 f"Test Acc: {acc*100:6.2f}% | "
                 f"I(Z;Y): {I_ZY:7.3f} bits | I(X;Z): {I_XZ:7.3f} bits"
+            )
+            print(
+                f"  Error share by true class (percent of all mistakes): {shares_str}"
             )
 
         all_results[strategy_name] = {
@@ -180,8 +267,12 @@ def main():
             "accs": accs,
             "izy": izy_list,
             "ixz": ixz_list,
+            "err_counts": err_counts_list,
+            "err_shares": err_shares_list,
+            "totals": totals_per_class,  # store totals to use in legend labels
         }
 
+    # 1) Accuracy vs Prune Ratio (all strategies)
     plt.figure(figsize=(8, 6))
     for strategy_name, results in all_results.items():
         plt.plot(results["ratios"], results["accs"], marker="o", label=strategy_name)
@@ -196,6 +287,7 @@ def main():
     plt.close()
     print(f"Saved plot to {plot_path}")
 
+    # 2) I(X;Z) vs Prune Ratio (all strategies)
     plt.figure(figsize=(8, 6))
     for strategy_name, results in all_results.items():
         plt.plot(results["ratios"], results["ixz"], marker="o", label=strategy_name)
@@ -210,6 +302,7 @@ def main():
     plt.close()
     print(f"Saved plot to {plot_path}")
 
+    # 3) I(Z;Y) vs Prune Ratio (all strategies)
     plt.figure(figsize=(8, 6))
     for strategy_name, results in all_results.items():
         plt.plot(results["ratios"], results["izy"], marker="o", label=strategy_name)
@@ -223,6 +316,88 @@ def main():
     plt.savefig(plot_path)
     plt.close()
     print(f"Saved plot to {plot_path}")
+
+    # 4) Absolute number of errors per class vs Prune Ratio (10 lines), per strategy
+    for strategy_name, results in all_results.items():
+        counts_arr = np.array(results["err_counts"])  # [len(ratios), 10]
+        totals = (
+            results["totals"]
+            if results.get("totals") is not None
+            else [None] * counts_arr.shape[1]
+        )
+        plt.figure(figsize=(9, 6))
+        for c in range(counts_arr.shape[1]):  # 10 classes
+            label_total = f" (N={totals[c]})" if totals[c] is not None else ""
+            plt.plot(
+                results["ratios"],
+                counts_arr[:, c],
+                marker="o",
+                label=f"class {c}{label_total}",
+            )
+        plt.xlabel("Prune Ratio")
+        plt.ylabel("# Errors (absolute)")
+        plt.title(f"Errors per Class vs Prune Ratio - {strategy_name}")
+        plt.legend(ncol=2)
+        plt.grid(True)
+        plt.tight_layout()
+        plot_path = os.path.join(
+            "pruning_plots", f"errors_per_class_counts_{strategy_name}.png"
+        )
+        plt.savefig(plot_path)
+        plt.close()
+        print(f"Saved plot to {plot_path}")
+
+    # 5) Percentage share of errors per class vs Prune Ratio (10 lines), per strategy
+    for strategy_name, results in all_results.items():
+        shares_arr = np.array(results["err_shares"])  # [len(ratios), 10]
+        shares_arr_pct = shares_arr * 100.0
+        totals = (
+            results["totals"]
+            if results.get("totals") is not None
+            else [None] * shares_arr_pct.shape[1]
+        )
+        plt.figure(figsize=(9, 6))
+        for c in range(shares_arr_pct.shape[1]):  # 10 classes
+            label_total = f" (N={totals[c]})" if totals[c] is not None else ""
+            plt.plot(
+                results["ratios"],
+                shares_arr_pct[:, c],
+                marker="o",
+                label=f"class {c}{label_total}",
+            )
+        plt.xlabel("Prune Ratio")
+        plt.ylabel("Error Share (%)")
+        plt.title(f"Error Share per Class vs Prune Ratio - {strategy_name}")
+        plt.legend(ncol=2)
+        plt.grid(True)
+        plt.tight_layout()
+        plot_path = os.path.join(
+            "pruning_plots", f"errors_per_class_percentage_{strategy_name}.png"
+        )
+        plt.savefig(plot_path)
+        plt.close()
+        print(f"Saved plot to {plot_path}")
+
+    # 6) Compare Actual Accuracy vs Theoretical Accuracy (2^I(Z;Y) to percent), per strategy
+    for strategy_name, results in all_results.items():
+        ratios = results["ratios"]
+        acc_pct = 100.0 * np.array(results["accs"])
+        theo_pct = np.power(2.0, np.array(results["izy"])) * 10
+        plt.figure(figsize=(8.5, 6))
+        plt.plot(ratios, acc_pct, marker="o", label="Actual Accuracy (%)")
+        plt.plot(ratios, theo_pct, marker="s", label="Theoretical 2^{I(Z;Y)} (%)")
+        plt.xlabel("Prune Ratio")
+        plt.ylabel("Accuracy (%)")
+        plt.title(f"Actual vs Theoretical Accuracy - {strategy_name}")
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plot_path = os.path.join(
+            "pruning_plots", f"accuracy_vs_theoretical_{strategy_name}.png"
+        )
+        plt.savefig(plot_path)
+        plt.close()
+        print(f"Saved plot to {plot_path}")
 
 
 if __name__ == "__main__":
