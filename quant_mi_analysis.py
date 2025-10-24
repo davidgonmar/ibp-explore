@@ -19,10 +19,13 @@ import numpy as np
 from torch.ao.quantization.fake_quantize import FakeQuantize
 from torch.ao.quantization.observer import MinMaxObserver, PerChannelMinMaxObserver
 import math
+from itertools import product
+import random
 
 BATCH_SIZE = 128
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MI_SAMPLE = 200
+MAX_HETERO_COMBOS = 100
 
 cfg = DictConfig({"dataset": {"name": "mnist", "size": 28, "num_channels": 1}})
 
@@ -36,15 +39,7 @@ mnist_subset = torch.utils.data.Subset(
 _ce_loss = torch.nn.CrossEntropyLoss()
 
 CONFIGS = [
-    {
-        "name": "W2_A2_sym",
-        "w_bits": 2,
-        "a_bits": 2,
-        "w_scheme": "per_channel_symmetric",
-        "a_scheme": "per_tensor_symmetric",
-        "w_sym": True,
-        "a_sym": True,
-    },
+    # {"name": "W2_A2_sym", "w_bits": 2, "a_bits": 2, "w_scheme": "per_channel_symmetric", "a_scheme": "per_tensor_symmetric", "w_sym": True, "a_sym": True},
     {
         "name": "W3_A3_sym",
         "w_bits": 3,
@@ -117,24 +112,8 @@ CONFIGS = [
         "w_sym": True,
         "a_sym": False,
     },
-    {
-        "name": "W2_A8_asymA",
-        "w_bits": 2,
-        "a_bits": 8,
-        "w_scheme": "per_channel_symmetric",
-        "a_scheme": "per_tensor_affine",
-        "w_sym": True,
-        "a_sym": False,
-    },
-    {
-        "name": "W8_A2_sym",
-        "w_bits": 8,
-        "a_bits": 2,
-        "w_scheme": "per_channel_symmetric",
-        "a_scheme": "per_tensor_symmetric",
-        "w_sym": True,
-        "a_sym": True,
-    },
+    # {"name": "W2_A8_asymA", "w_bits": 2, "a_bits": 8, "w_scheme": "per_channel_symmetric", "a_scheme": "per_tensor_affine", "w_sym": True, "a_sym": False},
+    # {"name": "W8_A2_sym", "w_bits": 8, "a_bits": 2, "w_scheme": "per_channel_symmetric", "a_scheme": "per_tensor_symmetric", "w_sym": True, "a_sym": True},
     {
         "name": "W6_A5_mix",
         "w_bits": 6,
@@ -186,20 +165,21 @@ def _make_ranges(bits, symmetric):
     return qmin, qmax, dtype
 
 
-def _apply_config_fakequant(model, conf):
+def _qscheme_from_str(s):
+    if s == "per_tensor_affine":
+        return torch.per_tensor_affine
+    if s == "per_tensor_symmetric":
+        return torch.per_tensor_symmetric
+    if s == "per_channel_symmetric":
+        return torch.per_channel_symmetric
+    return torch.per_tensor_symmetric
+
+
+def _make_qconfig_from_conf(conf):
     w_qmin, w_qmax, w_dtype = _make_ranges(conf["w_bits"], conf["w_sym"])
     a_qmin, a_qmax, a_dtype = _make_ranges(conf["a_bits"], conf["a_sym"])
-    if conf["a_scheme"] == "per_tensor_affine":
-        a_qscheme = torch.per_tensor_affine
-    elif conf["a_scheme"] == "per_tensor_symmetric":
-        a_qscheme = torch.per_tensor_symmetric
-    else:
-        a_qscheme = torch.per_tensor_symmetric
-    if conf["w_scheme"] == "per_channel_symmetric":
-        w_qscheme = torch.per_channel_symmetric
-    else:
-        w_qscheme = torch.per_tensor_symmetric
-
+    a_qscheme = _qscheme_from_str(conf["a_scheme"])
+    w_qscheme = _qscheme_from_str(conf["w_scheme"])
     act_fq = FakeQuantize.with_args(
         observer=MinMaxObserver,
         dtype=a_dtype,
@@ -227,9 +207,16 @@ def _apply_config_fakequant(model, conf):
             quant_max=w_qmax,
             reduce_range=False,
         )
+    return torch.ao.quantization.QConfig(activation=act_fq, weight=w_fq)
+
+
+def _apply_layerwise_fakequant(model, conf_tuple):
     m = copy.deepcopy(model).cpu()
     m.train()
-    m.qconfig = torch.ao.quantization.QConfig(activation=act_fq, weight=w_fq)
+    m.qconfig = None
+    m.fc1.qconfig = _make_qconfig_from_conf(conf_tuple[0])
+    m.fc2.qconfig = _make_qconfig_from_conf(conf_tuple[1])
+    m.fc3.qconfig = _make_qconfig_from_conf(conf_tuple[2])
     torch.ao.quantization.prepare_qat(m, inplace=True)
     calib_loader = DataLoader(mnist_subset, batch_size=BATCH_SIZE, shuffle=False)
     with torch.no_grad():
@@ -237,17 +224,6 @@ def _apply_config_fakequant(model, conf):
             m(x)
     m.eval()
     return m
-
-
-QUANTIZATION_STRATEGIES = {
-    "fakequant_config_sweep": lambda model, _params_unused, conf: _apply_config_fakequant(
-        model, conf
-    )
-}
-
-keys_to_omit = []
-for key in keys_to_omit:
-    QUANTIZATION_STRATEGIES.pop(key)
 
 
 def _model_device_and_dtype(model):
@@ -282,7 +258,6 @@ def error_breakdown_by_true_class(model, loader, num_classes=10):
     model.eval()
     total_per_class = torch.zeros(num_classes, dtype=torch.long)
     errors_per_class = torch.zeros(num_classes, dtype=torch.long)
-
     with torch.no_grad():
         for x, y in loader:
             mdev, _ = _model_device_and_dtype(model)
@@ -294,17 +269,14 @@ def error_breakdown_by_true_class(model, loader, num_classes=10):
                 yc = y == c
                 total_per_class[c] += yc.sum().item()
                 errors_per_class[c] += (yc & wrong).sum().item()
-
     total_errors = int(errors_per_class.sum().item())
     if total_errors > 0:
         error_share = (errors_per_class.float() / total_errors).tolist()
     else:
         error_share = [0.0] * num_classes
-
     class_error_rate = (
         errors_per_class.float() / total_per_class.clamp_min(1).float()
     ).tolist()
-
     return {
         "errors_per_class": [int(v) for v in errors_per_class.tolist()],
         "total_per_class": [int(v) for v in total_per_class.tolist()],
@@ -368,198 +340,160 @@ def main():
 
     os.makedirs("quantization_plots", exist_ok=True)
 
-    all_results = {}
-    for strategy_name, strategy_fn in QUANTIZATION_STRATEGIES.items():
-        accs, izy_list, ixz_list = [], [], []
-        err_counts_list = []
-        err_shares_list = []
-        totals_per_class = None
+    accs, izy_list, ixz_list = [], [], []
+    err_counts_list = []
+    err_shares_list = []
+    totals_per_class = None
+    labels = []
 
-        print(f"\n=== Quantization strategy: {strategy_name} ===")
-        for conf in CONFIGS:
-            model = copy.deepcopy(model_base)
+    conf_iter = product(CONFIGS, repeat=3)
 
-            parameters_placeholder = [
-                (model.fc1, "weight"),
-                (model.fc2, "weight"),
-                (model.fc3, "weight"),
-            ]
+    if MAX_HETERO_COMBOS is not None:
+        # ramdom selection
+        conf_iter = random.sample(list(conf_iter), MAX_HETERO_COMBOS)
 
-            model = strategy_fn(model, parameters_placeholder, conf)
+    print("\n=== Quantization strategy: fakequant_layerwise_heterogeneous ===")
+    for conf_tuple in conf_iter:
+        model = copy.deepcopy(model_base)
+        model = _apply_layerwise_fakequant(model, conf_tuple)
+        label = (
+            f"{conf_tuple[0]['name']}|{conf_tuple[1]['name']}|{conf_tuple[2]['name']}"
+        )
 
-            acc = evaluate_accuracy(model, test_loader)
-            breakdown = error_breakdown_by_true_class(
-                model, test_loader, num_classes=10
-            )
-            I_ZY, I_XZ = estimate_IZY_and_IXZ(model, test_loader_mi)
+        acc = evaluate_accuracy(model, test_loader)
+        breakdown = error_breakdown_by_true_class(model, test_loader, num_classes=10)
+        I_ZY, I_XZ = estimate_IZY_and_IXZ(model, test_loader_mi)
 
-            if totals_per_class is None:
-                totals_per_class = breakdown["total_per_class"]
+        if totals_per_class is None:
+            totals_per_class = breakdown["total_per_class"]
 
-            accs.append(acc)
-            izy_list.append(I_ZY)
-            ixz_list.append(I_XZ)
-            err_counts_list.append(breakdown["errors_per_class"])
-            err_shares_list.append(breakdown["error_share"])
+        accs.append(acc)
+        izy_list.append(I_ZY)
+        ixz_list.append(I_XZ)
+        err_counts_list.append(breakdown["errors_per_class"])
+        err_shares_list.append(breakdown["error_share"])
+        labels.append(label)
 
-            shares_pct = [f"{100*s:.1f}%" for s in breakdown["error_share"]]
-            shares_str = ", ".join(
-                [f"class {i}: {p}" for i, p in enumerate(shares_pct)]
-            )
-            print(
-                f"Config: {conf['name']} (W{conf['w_bits']},A{conf['a_bits']}) | "
-                f"Test Acc: {acc*100:6.2f}% | "
-                f"I(Z;Y): {I_ZY:7.3f} bits | I(X;Z): {I_XZ:7.3f} bits"
-            )
-            print(
-                f"  Error share by true class (percent of all mistakes): {shares_str}"
-            )
+        shares_pct = [f"{100*s:.1f}%" for s in breakdown["error_share"]]
+        shares_str = ", ".join([f"class {i}: {p}" for i, p in enumerate(shares_pct)])
+        print(
+            f"Config: {label} | Test Acc: {acc*100:6.2f}% | I(Z;Y): {I_ZY:7.3f} bits | I(X;Z): {I_XZ:7.3f} bits"
+        )
+        print(f"  Error share by true class (percent of all mistakes): {shares_str}")
 
-        all_results[strategy_name] = {
-            "labels": [c["name"] for c in CONFIGS],
-            "accs": accs,
-            "izy": izy_list,
-            "ixz": ixz_list,
-            "err_counts": err_counts_list,
-            "err_shares": err_shares_list,
-            "totals": totals_per_class,
-        }
+    x = np.arange(len(labels))
 
-    x = np.arange(len(CONFIGS))
-    labels = [c["name"] for c in CONFIGS]
-
-    plt.figure(figsize=(10, 6))
-    for strategy_name, results in all_results.items():
-        plt.plot(x, results["accs"], marker="o", label=strategy_name)
-    plt.xlabel("Quantization Config")
+    plt.figure(figsize=(12, 6))
+    plt.plot(x, accs, marker="o", label="fakequant_layerwise_heterogeneous")
+    plt.xlabel("Quantization Config (fc1|fc2|fc3)")
     plt.ylabel("Test Accuracy")
-    plt.title("Test Accuracy vs Quantization Config")
-    plt.xticks(x, labels, rotation=45, ha="right")
+    plt.title("Test Accuracy vs Heterogeneous Layerwise Quantization Config")
+    plt.xticks(x, labels, rotation=90)
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plot_path = os.path.join("quantization_plots", "acc_vs_configs_all_methods.png")
+    plot_path = os.path.join("quantization_plots", "acc_vs_configs_hetero.png")
     plt.savefig(plot_path)
     plt.close()
     print(f"Saved plot to {plot_path}")
 
-    plt.figure(figsize=(10, 6))
-    for strategy_name, results in all_results.items():
-        plt.plot(x, results["ixz"], marker="o", label=strategy_name)
-    plt.xlabel("Quantization Config")
+    plt.figure(figsize=(12, 6))
+    plt.plot(x, ixz_list, marker="o", label="fakequant_layerwise_heterogeneous")
+    plt.xlabel("Quantization Config (fc1|fc2|fc3)")
     plt.ylabel("I(X;Z) (bits)")
-    plt.title("I(X;Z) vs Quantization Config")
-    plt.xticks(x, labels, rotation=45, ha="right")
+    plt.title("I(X;Z) vs Heterogeneous Layerwise Quantization Config")
+    plt.xticks(x, labels, rotation=90)
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plot_path = os.path.join("quantization_plots", "ixz_vs_configs_all_methods.png")
+    plot_path = os.path.join("quantization_plots", "ixz_vs_configs_hetero.png")
     plt.savefig(plot_path)
     plt.close()
     print(f"Saved plot to {plot_path}")
 
-    plt.figure(figsize=(10, 6))
-    for strategy_name, results in all_results.items():
-        plt.plot(x, results["izy"], marker="o", label=strategy_name)
-    plt.xlabel("Quantization Config")
+    plt.figure(figsize=(12, 6))
+    plt.plot(x, izy_list, marker="o", label="fakequant_layerwise_heterogeneous")
+    plt.xlabel("Quantization Config (fc1|fc2|fc3)")
     plt.ylabel("I(Z;Y) (bits)")
-    plt.title("I(Z;Y) vs Quantization Config")
-    plt.xticks(x, labels, rotation=45, ha="right")
+    plt.title("I(Z;Y) vs Heterogeneous Layerwise Quantization Config")
+    plt.xticks(x, labels, rotation=90)
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plot_path = os.path.join("quantization_plots", "izy_vs_configs_all_methods.png")
+    plot_path = os.path.join("quantization_plots", "izy_vs_configs_hetero.png")
     plt.savefig(plot_path)
     plt.close()
     print(f"Saved plot to {plot_path}")
 
-    for strategy_name, results in all_results.items():
-        counts_arr = np.array(results["err_counts"])
-        totals = (
-            results["totals"]
-            if results.get("totals") is not None
-            else [None] * counts_arr.shape[1]
-        )
-        plt.figure(figsize=(10, 6))
-        for c in range(counts_arr.shape[1]):
-            label_total = f" (N={totals[c]})" if totals[c] is not None else ""
-            plt.plot(
-                x,
-                counts_arr[:, c],
-                marker="o",
-                label=f"class {c}{label_total}",
-            )
-        plt.xlabel("Quantization Config")
-        plt.ylabel("# Errors (absolute)")
-        plt.title(f"Errors per Class vs Quantization Config - {strategy_name}")
-        plt.xticks(x, labels, rotation=45, ha="right")
-        plt.legend(ncol=2)
-        plt.grid(True)
-        plt.tight_layout()
-        plot_path = os.path.join(
-            "quantization_plots", f"errors_per_class_counts_{strategy_name}.png"
-        )
-        plt.savefig(plot_path)
-        plt.close()
-        print(f"Saved plot to {plot_path}")
+    counts_arr = np.array(err_counts_list)
+    totals = (
+        totals_per_class
+        if totals_per_class is not None
+        else [None] * counts_arr.shape[1]
+    )
+    plt.figure(figsize=(12, 6))
+    for c in range(counts_arr.shape[1]):
+        label_total = f" (N={totals[c]})" if totals[c] is not None else ""
+        plt.plot(x, counts_arr[:, c], marker="o", label=f"class {c}{label_total}")
+    plt.xlabel("Quantization Config (fc1|fc2|fc3)")
+    plt.ylabel("# Errors (absolute)")
+    plt.title("Errors per Class vs Heterogeneous Layerwise Quantization Config")
+    plt.xticks(x, labels, rotation=90)
+    plt.legend(ncol=2)
+    plt.grid(True)
+    plt.tight_layout()
+    plot_path = os.path.join("quantization_plots", "errors_per_class_counts_hetero.png")
+    plt.savefig(plot_path)
+    plt.close()
+    print(f"Saved plot to {plot_path}")
 
-    for strategy_name, results in all_results.items():
-        shares_arr = np.array(results["err_shares"])
-        shares_arr_pct = shares_arr * 100.0
-        totals = (
-            results["totals"]
-            if results.get("totals") is not None
-            else [None] * shares_arr_pct.shape[1]
-        )
-        plt.figure(figsize=(10, 6))
-        for c in range(shares_arr_pct.shape[1]):
-            label_total = f" (N={totals[c]})" if totals[c] is not None else ""
-            plt.plot(
-                x,
-                shares_arr_pct[:, c],
-                marker="o",
-                label=f"class {c}{label_total}",
-            )
-        plt.xlabel("Quantization Config")
-        plt.ylabel("Error Share (%)")
-        plt.title(f"Error Share per Class vs Quantization Config - {strategy_name}")
-        plt.xticks(x, labels, rotation=45, ha="right")
-        plt.legend(ncol=2)
-        plt.grid(True)
-        plt.tight_layout()
-        plot_path = os.path.join(
-            "quantization_plots", f"errors_per_class_percentage_{strategy_name}.png"
-        )
-        plt.savefig(plot_path)
-        plt.close()
-        print(f"Saved plot to {plot_path}")
+    shares_arr = np.array(err_shares_list)
+    shares_arr_pct = shares_arr * 100.0
+    totals = (
+        totals_per_class
+        if totals_per_class is not None
+        else [None] * shares_arr_pct.shape[1]
+    )
+    plt.figure(figsize=(12, 6))
+    for c in range(shares_arr_pct.shape[1]):
+        label_total = f" (N={totals[c]})" if totals[c] is not None else ""
+        plt.plot(x, shares_arr_pct[:, c], marker="o", label=f"class {c}{label_total}")
+    plt.xlabel("Quantization Config (fc1|fc2|fc3)")
+    plt.ylabel("Error Share (%)")
+    plt.title("Error Share per Class vs Heterogeneous Layerwise Quantization Config")
+    plt.xticks(x, labels, rotation=90)
+    plt.legend(ncol=2)
+    plt.grid(True)
+    plt.tight_layout()
+    plot_path = os.path.join(
+        "quantization_plots", "errors_per_class_percentage_hetero.png"
+    )
+    plt.savefig(plot_path)
+    plt.close()
+    print(f"Saved plot to {plot_path}")
 
-    for strategy_name, results in all_results.items():
-        acc_pct = 100.0 * np.array(results["accs"])
-        I_vals = np.array(results["izy"])
-        H_Y_bits = math.log2(10)
-        theo_acc = [
-            fano_upper_accuracy_from_I(I_bits, K=10, H_Y_bits=H_Y_bits)
-            for I_bits in I_vals
-        ]
-        theo_pct = 100.0 * np.array(theo_acc)
+    acc_pct = 100.0 * np.array(accs)
+    I_vals = np.array(izy_list)
+    H_Y_bits = math.log2(10)
+    theo_acc = [
+        fano_upper_accuracy_from_I(I_bits, K=10, H_Y_bits=H_Y_bits) for I_bits in I_vals
+    ]
+    theo_pct = 100.0 * np.array(theo_acc)
 
-        plt.figure(figsize=(10, 6))
-        plt.plot(x, acc_pct, marker="o", label="Actual Accuracy (%)")
-        plt.plot(x, theo_pct, marker="s", label="Theoretical (Fano upper bound) (%)")
-        plt.xlabel("Quantization Config")
-        plt.ylabel("Accuracy (%)")
-        plt.title(f"Actual vs Theoretical Accuracy - {strategy_name}")
-        plt.xticks(x, labels, rotation=45, ha="right")
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
-        plot_path = os.path.join(
-            "quantization_plots", f"accuracy_vs_theoretical_{strategy_name}.png"
-        )
-        plt.savefig(plot_path)
-        plt.close()
-        print(f"Saved plot to {plot_path}")
+    plt.figure(figsize=(12, 6))
+    plt.plot(x, acc_pct, marker="o", label="Actual Accuracy (%)")
+    plt.plot(x, theo_pct, marker="s", label="Theoretical (Fano upper bound) (%)")
+    plt.xlabel("Quantization Config (fc1|fc2|fc3)")
+    plt.ylabel("Accuracy (%)")
+    plt.title("Actual vs Theoretical Accuracy (Fano) — Heterogeneous Layerwise")
+    plt.xticks(x, labels, rotation=90)
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plot_path = os.path.join("quantization_plots", "accuracy_vs_theoretical_hetero.png")
+    plt.savefig(plot_path)
+    plt.close()
+    print(f"Saved plot to {plot_path}")
 
 
 if __name__ == "__main__":
