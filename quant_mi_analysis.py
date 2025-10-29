@@ -22,10 +22,11 @@ import math
 from itertools import product
 import random
 
+
 BATCH_SIZE = 128
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MI_SAMPLE = 200
-MAX_HETERO_COMBOS = 10
+MAX_HETERO_COMBOS = 50
 
 cfg = DictConfig({"dataset": {"name": "mnist", "size": 28, "num_channels": 1}})
 

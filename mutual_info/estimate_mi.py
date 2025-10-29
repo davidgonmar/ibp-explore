@@ -43,7 +43,9 @@ def estimate_mi_zx(
         mi_config = MIEstimationCompressionConfig()
     model.eval()
 
-    input_ae = prepare_input_autoencoder(cfg=cfg, mi_config=mi_config, device=device)
+    input_ae = prepare_input_autoencoder(
+        cfg=cfg, mi_config=mi_config, device=device, finetune=False
+    )
     input_ae.eval()
     x_compressed = []
     with torch.no_grad():

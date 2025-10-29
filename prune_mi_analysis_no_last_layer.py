@@ -65,7 +65,7 @@ def fano_upper_accuracy_from_I(
 def _ao_sparsify_model_with_config(model, sparsifier):
     sparse_config = []
     for fqn, mod in model.named_modules():
-        if fqn in ("fc1", "fc2", "fc3") and isinstance(mod, torch.nn.Linear):
+        if fqn in ("fc1", "fc2") and isinstance(mod, torch.nn.Linear):
             sparse_config.append({"tensor_fqn": f"{fqn}.weight"})
     sparsifier.prepare(model, sparse_config)
     sparsifier.step()
@@ -83,7 +83,7 @@ mnist_subset = torch.utils.data.Subset(
 def _wanda_sparsify(model, amount):
     sparse_config = []
     for fqn, mod in model.named_modules():
-        if fqn in ("fc1", "fc2", "fc3") and isinstance(mod, torch.nn.Linear):
+        if fqn in ("fc1", "fc2") and isinstance(mod, torch.nn.Linear):
             sparse_config.append({"tensor_fqn": f"{fqn}.weight"})
     sparsifier = WandaSparsifier(
         sparsity_level=amount,
@@ -233,7 +233,7 @@ def main():
         0.975,
         0.99,
     ]
-    os.makedirs("pruning_plots", exist_ok=True)
+    os.makedirs("pruning_plots_no_last_layer", exist_ok=True)
     all_results = {}
     for strategy_name, strategy_fn in PRUNING_STRATEGIES.items():
         accs, izy_list, ixz_list = [], [], []
@@ -246,7 +246,6 @@ def main():
             parameters_to_prune = [
                 (model.fc1, "weight"),
                 (model.fc2, "weight"),
-                (model.fc3, "weight"),
             ]
             if ratio > 0.0:
                 strategy_fn(model, parameters_to_prune, ratio)
@@ -292,7 +291,9 @@ def main():
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plot_path = os.path.join("pruning_plots", "acc_vs_ratio_all_methods.png")
+    plot_path = os.path.join(
+        "pruning_plots_no_last_layer", "acc_vs_ratio_all_methods.png"
+    )
     plt.savefig(plot_path)
     plt.close()
     print(f"Saved plot to {plot_path}")
@@ -305,7 +306,9 @@ def main():
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plot_path = os.path.join("pruning_plots", "ixz_vs_ratio_all_methods.png")
+    plot_path = os.path.join(
+        "pruning_plots_no_last_layer", "ixz_vs_ratio_all_methods.png"
+    )
     plt.savefig(plot_path)
     plt.close()
     print(f"Saved plot to {plot_path}")
@@ -318,7 +321,9 @@ def main():
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plot_path = os.path.join("pruning_plots", "izy_vs_ratio_all_methods.png")
+    plot_path = os.path.join(
+        "pruning_plots_no_last_layer", "izy_vs_ratio_all_methods.png"
+    )
     plt.savefig(plot_path)
     plt.close()
     print(f"Saved plot to {plot_path}")
@@ -345,7 +350,8 @@ def main():
         plt.grid(True)
         plt.tight_layout()
         plot_path = os.path.join(
-            "pruning_plots", f"errors_per_class_counts_{strategy_name}.png"
+            "pruning_plots_no_last_layer",
+            f"errors_per_class_counts_{strategy_name}.png",
         )
         plt.savefig(plot_path)
         plt.close()
@@ -374,7 +380,8 @@ def main():
         plt.grid(True)
         plt.tight_layout()
         plot_path = os.path.join(
-            "pruning_plots", f"errors_per_class_percentage_{strategy_name}.png"
+            "pruning_plots_no_last_layer",
+            f"errors_per_class_percentage_{strategy_name}.png",
         )
         plt.savefig(plot_path)
         plt.close()
@@ -401,7 +408,8 @@ def main():
         plt.grid(True)
         plt.tight_layout()
         plot_path = os.path.join(
-            "pruning_plots", f"accuracy_vs_theoretical_{strategy_name}.png"
+            "pruning_plots_no_last_layer",
+            f"accuracy_vs_theoretical_{strategy_name}.png",
         )
         plt.savefig(plot_path)
         plt.close()

@@ -78,6 +78,7 @@ mnist_train = datasets.MNIST(
 mnist_subset = torch.utils.data.Subset(
     mnist_train, torch.randperm(len(mnist_train))[:MI_SAMPLE]
 )
+TRAIN_LOADER = DataLoader(mnist_train, batch_size=BATCH_SIZE, shuffle=False)
 
 
 def _wanda_sparsify(model, amount):
@@ -151,13 +152,44 @@ for key in keys_to_omit:
     PRUNING_STRATEGIES.pop(key)
 
 
+def _extract_features(model, x):
+    with torch.no_grad():
+        _, z = model(x, return_hidden=True)
+    return z
+
+
+def _fit_linear_classifier(model):
+    model.eval()
+    feats_list, ys_list = [], []
+    for x, y in TRAIN_LOADER:
+        x, y = x.to(DEVICE), y.to(DEVICE)
+        feats = _extract_features(model, x)
+        feats_list.append(feats)
+        ys_list.append(y)
+    X = torch.cat(feats_list, dim=0)
+    Y = torch.cat(ys_list, dim=0)
+    clf = torch.nn.Linear(X.size(1), 10).to(DEVICE)
+    opt = torch.optim.Adam(clf.parameters(), lr=1e-2)
+    loss_fn = torch.nn.CrossEntropyLoss()
+    clf.train()
+    for _ in range(5):
+        opt.zero_grad()
+        logits = clf(X)
+        loss = loss_fn(logits, Y)
+        loss.backward()
+        opt.step()
+    return clf
+
+
 def evaluate_accuracy(model, loader):
     model.eval()
+    clf = _fit_linear_classifier(model)
     correct, total = 0, 0
     with torch.no_grad():
         for x, y in loader:
             x, y = x.to(DEVICE), y.to(DEVICE)
-            pred = model(x).argmax(dim=1)
+            feats = _extract_features(model, x)
+            pred = clf(feats).argmax(dim=1)
             correct += (pred == y).sum().item()
             total += y.size(0)
     return correct / total
@@ -171,12 +203,14 @@ def estimate_IZY_and_IXZ(model, loader):
 
 def error_breakdown_by_true_class(model, loader, num_classes=10):
     model.eval()
+    clf = _fit_linear_classifier(model)
     total_per_class = torch.zeros(num_classes, dtype=torch.long)
     errors_per_class = torch.zeros(num_classes, dtype=torch.long)
     with torch.no_grad():
         for x, y in loader:
             x, y = x.to(DEVICE), y.to(DEVICE)
-            pred = model(x).argmax(dim=1)
+            feats = _extract_features(model, x)
+            pred = clf(feats).argmax(dim=1)
             wrong = pred != y
             for c in range(num_classes):
                 yc = y == c
@@ -233,7 +267,7 @@ def main():
         0.975,
         0.99,
     ]
-    os.makedirs("pruning_plots", exist_ok=True)
+    os.makedirs("pruning_plots_with_probe", exist_ok=True)
     all_results = {}
     for strategy_name, strategy_fn in PRUNING_STRATEGIES.items():
         accs, izy_list, ixz_list = [], [], []
@@ -292,7 +326,7 @@ def main():
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plot_path = os.path.join("pruning_plots", "acc_vs_ratio_all_methods.png")
+    plot_path = os.path.join("pruning_plots_with_probe", "acc_vs_ratio_all_methods.png")
     plt.savefig(plot_path)
     plt.close()
     print(f"Saved plot to {plot_path}")
@@ -305,7 +339,7 @@ def main():
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plot_path = os.path.join("pruning_plots", "ixz_vs_ratio_all_methods.png")
+    plot_path = os.path.join("pruning_plots_with_probe", "ixz_vs_ratio_all_methods.png")
     plt.savefig(plot_path)
     plt.close()
     print(f"Saved plot to {plot_path}")
@@ -318,7 +352,7 @@ def main():
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plot_path = os.path.join("pruning_plots", "izy_vs_ratio_all_methods.png")
+    plot_path = os.path.join("pruning_plots_with_probe", "izy_vs_ratio_all_methods.png")
     plt.savefig(plot_path)
     plt.close()
     print(f"Saved plot to {plot_path}")
@@ -345,7 +379,7 @@ def main():
         plt.grid(True)
         plt.tight_layout()
         plot_path = os.path.join(
-            "pruning_plots", f"errors_per_class_counts_{strategy_name}.png"
+            "pruning_plots_with_probe", f"errors_per_class_counts_{strategy_name}.png"
         )
         plt.savefig(plot_path)
         plt.close()
@@ -374,7 +408,8 @@ def main():
         plt.grid(True)
         plt.tight_layout()
         plot_path = os.path.join(
-            "pruning_plots", f"errors_per_class_percentage_{strategy_name}.png"
+            "pruning_plots_with_probe",
+            f"errors_per_class_percentage_{strategy_name}.png",
         )
         plt.savefig(plot_path)
         plt.close()
@@ -401,7 +436,7 @@ def main():
         plt.grid(True)
         plt.tight_layout()
         plot_path = os.path.join(
-            "pruning_plots", f"accuracy_vs_theoretical_{strategy_name}.png"
+            "pruning_plots_with_probe", f"accuracy_vs_theoretical_{strategy_name}.png"
         )
         plt.savefig(plot_path)
         plt.close()
