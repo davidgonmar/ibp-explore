@@ -183,7 +183,7 @@ def main():
     baseline_bits = _baseline_size_bits(base_model)
 
     CONFIGS = build_configs()
-    N_CONFIGS = 5
+    N_CONFIGS = 20
     CONFIGS = random.sample(CONFIGS, N_CONFIGS)
 
     labels = []
