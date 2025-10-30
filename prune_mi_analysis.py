@@ -179,13 +179,10 @@ def main():
     all_results = {}
 
     for strategy_name, strategy_fn in PRUNING_STRATEGIES.items():
-        accs = []
+        accs_by_decoder = {}
         izy_list = []
         ixz_list = []
         compr_list = []
-        err_counts_list = []
-        err_shares_list = []
-        totals_per_class = None
 
         print(f"\n=== Pruning strategy: {strategy_name} ===")
         for ratio in ratios:
@@ -210,55 +207,43 @@ def main():
 
             compr_val = _compression_ratio_pruned(model, baseline_bits)
 
-            eval_info, clf = evaluate_with_classifier(
+            eval_results = evaluate_with_classifier(
                 model,
                 test_loader,
-                classifier="mlp",
+                classifiers=["linear", "mlp"],
                 num_classes=10,
             )
-            acc = eval_info["accuracy"]
 
-            breakdown = {
-                "errors_per_class": eval_info["errors_per_class"],
-                "total_per_class": eval_info["total_per_class"],
-                "total_errors": eval_info["total_errors"],
-                "error_share": eval_info["error_share"],
-            }
+            for dec_name, info in eval_results.items():
+                if dec_name not in accs_by_decoder:
+                    accs_by_decoder[dec_name] = []
+                accs_by_decoder[dec_name].append(info["accuracy"])
 
             I_ZY, I_XZ = estimate_IZY_and_IXZ(model, test_loader_mi)
 
-            if totals_per_class is None:
-                totals_per_class = breakdown["total_per_class"]
-
-            accs.append(acc)
             izy_list.append(I_ZY)
             ixz_list.append(I_XZ)
             compr_list.append(compr_val)
-            err_counts_list.append(breakdown["errors_per_class"])
-            err_shares_list.append(breakdown["error_share"])
 
-            shares_pct = [f"{100 * s:.1f}%" for s in breakdown["error_share"]]
-            shares_str = ", ".join(
-                [f"class {i}: {p}" for i, p in enumerate(shares_pct)]
-            )
+            acc_print_parts = []
+            for dec_name, info in eval_results.items():
+                acc_print_parts.append(
+                    f"{dec_name} Acc: {info['accuracy'] * 100:6.2f}%"
+                )
+            acc_print = " | ".join(acc_print_parts)
+
             print(
                 f"Prune ratio: {ratio:.2f} | "
-                f"Probe Acc: {acc * 100:6.2f}% | "
+                f"{acc_print} | "
                 f"I(Z;Y): {I_ZY:7.3f} bits | I(X;Z): {I_XZ:7.3f} bits"
-            )
-            print(
-                " Error share by true class (percent of all mistakes): " f"{shares_str}"
             )
 
         all_results[strategy_name] = {
             "ratios": ratios,
-            "accs": accs,
+            "accs": accs_by_decoder,
             "izy": izy_list,
             "ixz": ixz_list,
             "compr": compr_list,
-            "err_counts": err_counts_list,
-            "err_shares": err_shares_list,
-            "totals": totals_per_class,
         }
 
     save_results_json(all_results, "results/pruning_all_layers.json")

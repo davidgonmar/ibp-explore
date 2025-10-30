@@ -153,100 +153,82 @@ def load_results_json(path):
         return json.load(f)
 
 
+import torch
+
+
 def evaluate_with_classifier(
     model,
     loader,
-    classifier="linear",
+    classifiers="linear",
     num_classes=10,
 ):
+    def build_classifier(spec, in_dim, num_classes):
+        if isinstance(spec, str):
+            s = spec.lower()
+            if s == "linear":
+                clf = torch.nn.Linear(in_dim, num_classes).to(DEVICE)
+            elif s == "mlp":
+                hidden_dim = 128
+                clf = torch.nn.Sequential(
+                    torch.nn.Linear(in_dim, hidden_dim),
+                    torch.nn.ReLU(),
+                    torch.nn.Linear(hidden_dim, num_classes),
+                ).to(DEVICE)
+            else:
+                raise ValueError(
+                    f"Unknown classifier spec '{spec}'. Use 'linear', 'mlp', or pass an nn.Module."
+                )
+            name = s
+        elif isinstance(spec, torch.nn.Module):
+            clf = spec.to(DEVICE)
+            name = clf.__class__.__name__.lower()
+        else:
+            raise TypeError("classifier must be 'linear', 'mlp', or a torch.nn.Module.")
+        return name, clf
+
+    def compute_accuracy(logits, Y):
+        preds = logits.argmax(dim=1)
+        correct = (preds == Y).sum().item()
+        total = Y.size(0)
+        return correct / total if total > 0 else 0.0
+
     model.eval()
     feats_list = []
     ys_list = []
+    decoder_logits_list = []
     with torch.no_grad():
         for x, y in loader:
             x = x.to(DEVICE)
             y = y.to(DEVICE)
-            _, z = model(x, return_hidden=True)
+            out, z = model(x, return_hidden=True)
             feats_list.append(z)
             ys_list.append(y)
+            decoder_logits_list.append(out)
 
     X = torch.cat(feats_list, dim=0)
     Y = torch.cat(ys_list, dim=0)
+    decoder_logits = torch.cat(decoder_logits_list, dim=0)
 
-    if isinstance(classifier, str):
-        spec = classifier.lower()
-        if spec == "linear":
-            classifier = torch.nn.Linear(
-                X.size(1),
-                num_classes,
-            ).to(DEVICE)
-        elif spec == "mlp":
-            hidden_dim = 128
-            classifier = torch.nn.Sequential(
-                torch.nn.Linear(X.size(1), hidden_dim),
-                torch.nn.ReLU(),
-                torch.nn.Linear(hidden_dim, num_classes),
-            ).to(DEVICE)
-        else:
-            raise ValueError(
-                f"Unknown classifier spec '{classifier}'. Use 'linear', 'mlp', or pass an nn.Module."
-            )
-    elif isinstance(classifier, torch.nn.Module):
-        classifier = classifier.to(DEVICE)
-    else:
-        raise TypeError("classifier must be 'linear', 'mlp', or a torch.nn.Module.")
+    results = {}
+    results["original"] = {"accuracy": compute_accuracy(decoder_logits, Y)}
 
-    opt = torch.optim.Adam(classifier.parameters(), lr=1e-2)
-    loss_fn = torch.nn.CrossEntropyLoss()
+    if not isinstance(classifiers, (list, tuple)):
+        classifiers = [classifiers]
 
-    classifier.train()
-    for _ in range(5):
-        opt.zero_grad()
-        logits = classifier(X)
-        loss = loss_fn(logits, Y)
-        loss.backward()
-        opt.step()
+    for spec in classifiers:
+        name, clf = build_classifier(spec, X.size(1), num_classes)
+        opt = torch.optim.Adam(clf.parameters(), lr=1e-2)
+        loss_fn = torch.nn.CrossEntropyLoss()
+        clf.train()
+        for _ in range(5):
+            opt.zero_grad()
+            logits = clf(X)
+            loss = loss_fn(logits, Y)
+            loss.backward()
+            opt.step()
+        clf.eval()
+        with torch.no_grad():
+            logits = clf(X)
+        results[name] = {"accuracy": compute_accuracy(logits, Y)}
 
-    classifier.eval()
-    with torch.no_grad():
-        logits = classifier(X)
-        preds = logits.argmax(dim=1)
-
-        correct = (preds == Y).sum().item()
-        total = Y.size(0)
-        accuracy = correct / total if total > 0 else 0.0
-
-        total_per_class = torch.zeros(
-            num_classes,
-            dtype=torch.long,
-            device=Y.device,
-        )
-        errors_per_class = torch.zeros(
-            num_classes,
-            dtype=torch.long,
-            device=Y.device,
-        )
-
-        wrong_mask = preds != Y
-        for c in range(num_classes):
-            yc = Y == c
-            total_per_class[c] = yc.sum()
-            errors_per_class[c] = (yc & wrong_mask).sum()
-
-        total_errors = int(errors_per_class.sum().item())
-        if total_errors > 0:
-            error_share = (errors_per_class.float() / total_errors).tolist()
-        else:
-            error_share = [0.0] * num_classes
-
-    eval_info = {
-        "accuracy": accuracy,
-        "correct": correct,
-        "total": total,
-        "errors_per_class": [int(v) for v in errors_per_class.tolist()],
-        "total_per_class": [int(v) for v in total_per_class.tolist()],
-        "total_errors": total_errors,
-        "error_share": error_share,
-    }
-
-    return eval_info, classifier
+    return results

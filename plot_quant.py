@@ -20,179 +20,117 @@ def main():
     labels = res["labels"]
     x = np.arange(len(labels))
 
-    accs = np.array(res["accs"])
-    ixz = np.array(res["ixz"])
-    izy = np.array(res["izy"])
-    compr = np.array(res["compr"])
+    accs_by_decoder = res["accs"]
+    ixz_arr = np.array(res["ixz"])
+    izy_arr = np.array(res["izy"])
+    compr_arr = np.array(res["compr"])
 
     theo_acc = fano_upper_accuracy_from_I(
-        izy,
+        izy_arr,
         K=10,
         H_Y_bits=math.log2(10),
     )
-    theo_acc = 100.0 * np.array(theo_acc)
+    theo_pct = 100.0 * np.array(theo_acc)
 
-    plt.figure(figsize=(12, 6))
-    plt.plot(x, accs, marker="o")
-    plt.xlabel("config (fc1|fc2|fc3)")
-    plt.ylabel("Test Accuracy")
-    plt.title("Test Accuracy vs Quantization Config")
-    plt.xticks(x, labels, rotation=90)
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, "acc_vs_config.png"))
-    plt.close()
+    fig, ax1 = plt.subplots(figsize=(12, 8))
+    ax2 = ax1.twinx()
 
-    plt.figure(figsize=(12, 6))
-    plt.plot(x, ixz, marker="o")
-    plt.xlabel("config (fc1|fc2|fc3)")
-    plt.ylabel("I(X;Z) (bits)")
-    plt.title("I(X;Z) vs Quantization Config")
-    plt.xticks(x, labels, rotation=90)
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, "ixz_vs_config.png"))
-    plt.close()
+    handles = []
+    labels_list = []
 
-    plt.figure(figsize=(12, 6))
-    plt.plot(x, izy, marker="o")
-    plt.xlabel("config (fc1|fc2|fc3)")
-    plt.ylabel("I(Z;Y) (bits)")
-    plt.title("I(Z;Y) vs Quantization Config")
-    plt.xticks(x, labels, rotation=90)
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, "izy_vs_config.png"))
-    plt.close()
-
-    plt.figure(figsize=(12, 6))
-    plt.plot(
-        x,
-        100.0 * accs,
-        marker="o",
-        label="Actual Accuracy (%)",
-    )
-    plt.plot(
-        x,
-        theo_acc,
-        marker="s",
-        label="Theoretical (Fano upper bound) (%)",
-    )
-    plt.xlabel("config (fc1|fc2|fc3)")
-    plt.ylabel("Accuracy (%)")
-    plt.title("Actual vs Theoretical Accuracy")
-    plt.xticks(x, labels, rotation=90)
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, "acc_vs_theoretical.png"))
-    plt.close()
-
-    err_counts = np.array(res["err_counts"])
-    err_shares = np.array(res["err_shares"]) * 100.0
-    totals = res["totals"]
-
-    plt.figure(figsize=(12, 6))
-    for c in range(err_counts.shape[1]):
-        label_total = f" (N={totals[c]})" if totals[c] is not None else ""
-        plt.plot(
+    for dec_name, acc_list in accs_by_decoder.items():
+        acc_pct = 100.0 * np.array(acc_list)
+        (h,) = ax1.plot(
             x,
-            err_counts[:, c],
+            acc_pct,
             marker="o",
-            label=f"class {c}{label_total}",
+            label=f"{dec_name} Accuracy (%)",
         )
-    plt.xlabel("config (fc1|fc2|fc3)")
-    plt.ylabel("# Errors (absolute)")
-    plt.title("Errors per Class vs Quantization Config")
-    plt.xticks(x, labels, rotation=90)
-    plt.legend(ncol=2)
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, "errors_per_class_counts.png"))
-    plt.close()
+        handles.append(h)
+        labels_list.append(f"{dec_name} Accuracy (%)")
 
-    plt.figure(figsize=(12, 6))
-    for c in range(err_shares.shape[1]):
-        label_total = f" (N={totals[c]})" if totals[c] is not None else ""
-        plt.plot(
-            x,
-            err_shares[:, c],
-            marker="o",
-            label=f"class {c}{label_total}",
-        )
-    plt.xlabel("config (fc1|fc2|fc3)")
-    plt.ylabel("Error Share (%)")
-    plt.title("Error Share per Class vs Quantization Config")
-    plt.xticks(x, labels, rotation=90)
-    plt.legend(ncol=2)
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, "errors_per_class_pct.png"))
-    plt.close()
-
-    sort_idx = np.argsort(compr)
-    compr_sorted = compr[sort_idx]
-    ixz_sorted = ixz[sort_idx]
-    izy_sorted = izy[sort_idx]
-    accs_sorted = accs[sort_idx]
-
-    plt.figure(figsize=(12, 6))
-    plt.plot(
-        compr_sorted,
-        ixz_sorted,
-        marker="o",
-    )
-    plt.xlabel("Compression Ratio (compressed/original)")
-    plt.ylabel("I(X;Z) (bits)")
-    plt.title("I(X;Z) vs Compression Ratio")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, "ixz_vs_compression_ratio.png"))
-    plt.close()
-
-    plt.figure(figsize=(12, 6))
-    plt.plot(
-        compr_sorted,
-        izy_sorted,
-        marker="o",
-    )
-    plt.xlabel("Compression Ratio (compressed/original)")
-    plt.ylabel("I(Z;Y) (bits)")
-    plt.title("I(Z;Y) vs Compression Ratio")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, "izy_vs_compression_ratio.png"))
-    plt.close()
-
-    theo_acc_ratio = fano_upper_accuracy_from_I(
-        izy,
-        K=10,
-        H_Y_bits=math.log2(10),
-    )
-    theo_acc_ratio = 100.0 * np.array(theo_acc_ratio)
-    theo_acc_ratio_sorted = theo_acc_ratio[sort_idx]
-
-    plt.figure(figsize=(12, 6))
-    plt.plot(
-        compr_sorted,
-        100.0 * accs_sorted,
-        marker="o",
-        label="Actual Accuracy (%)",
-    )
-    plt.plot(
-        compr_sorted,
-        theo_acc_ratio_sorted,
+    (h_theo,) = ax1.plot(
+        x,
+        theo_pct,
         marker="s",
         label="Fano Upper Bound (%)",
     )
-    plt.xlabel("Compression Ratio (compressed/original)")
-    plt.ylabel("Accuracy (%)")
-    plt.title("Accuracy vs Compression Ratio")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, "acc_vs_compression_ratio.png"))
-    plt.close()
+    handles.append(h_theo)
+    labels_list.append("Fano Upper Bound (%)")
+
+    (h_ixz,) = ax2.plot(
+        x,
+        ixz_arr,
+        marker="^",
+        linestyle="--",
+        label="I(X;Z) (bits)",
+    )
+    handles.append(h_ixz)
+    labels_list.append("I(X;Z) (bits)")
+
+    ax1.set_xlabel("Quantization Config (fc1|fc2|fc3)")
+    ax1.set_ylabel("Accuracy (%)")
+    ax2.set_ylabel("I(X;Z) (bits)")
+    ax1.set_title("Accuracy and I(X;Z) vs Quantization Config")
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(labels, rotation=90)
+    ax1.grid(True)
+    ax1.legend(handles, labels_list, loc="best")
+    fig.tight_layout()
+    fig.savefig(os.path.join(out_dir, "accuracy_ixz_vs_config.png"))
+    plt.close(fig)
+
+    sort_idx = np.argsort(compr_arr)
+    compr_sorted = compr_arr[sort_idx]
+    ixz_sorted = ixz_arr[sort_idx]
+    theo_sorted = theo_pct[sort_idx]
+
+    fig, ax1 = plt.subplots(figsize=(12, 8))
+    ax2 = ax1.twinx()
+
+    handles = []
+    labels_list = []
+
+    for dec_name, acc_list in accs_by_decoder.items():
+        acc_pct = 100.0 * np.array(acc_list)
+        acc_sorted = acc_pct[sort_idx]
+        (h,) = ax1.plot(
+            compr_sorted,
+            acc_sorted,
+            marker="o",
+            label=f"{dec_name} Accuracy (%)",
+        )
+        handles.append(h)
+        labels_list.append(f"{dec_name} Accuracy (%)")
+
+    (h_theo,) = ax1.plot(
+        compr_sorted,
+        theo_sorted,
+        marker="s",
+        label="Fano Upper Bound (%)",
+    )
+    handles.append(h_theo)
+    labels_list.append("Fano Upper Bound (%)")
+
+    (h_ixz,) = ax2.plot(
+        compr_sorted,
+        ixz_sorted,
+        marker="^",
+        linestyle="--",
+        label="I(X;Z) (bits)",
+    )
+    handles.append(h_ixz)
+    labels_list.append("I(X;Z) (bits)")
+
+    ax1.set_xlabel("Compression Ratio (compressed/original)")
+    ax1.set_ylabel("Accuracy (%)")
+    ax2.set_ylabel("I(X;Z) (bits)")
+    ax1.set_title("Accuracy and I(X;Z) vs Compression Ratio")
+    ax1.grid(True)
+    ax1.legend(handles, labels_list, loc="best")
+    fig.tight_layout()
+    fig.savefig(os.path.join(out_dir, "accuracy_ixz_vs_compression_ratio.png"))
+    plt.close(fig)
 
 
 if __name__ == "__main__":
