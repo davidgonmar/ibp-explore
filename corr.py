@@ -1,10 +1,12 @@
 import argparse, json, math
 import numpy as np
 
+
 def binary_entropy_bits(p):
     if p <= 0.0 or p >= 1.0:
         return 0.0
     return -(p * math.log2(p) + (1.0 - p) * math.log2(1.0 - p))
+
 
 def fano_error_upper_bound(I_bits, K=10, H_Y_bits=None, tol=1e-7):
     if H_Y_bits is None:
@@ -13,8 +15,10 @@ def fano_error_upper_bound(I_bits, K=10, H_Y_bits=None, tol=1e-7):
     if target <= 0.0:
         return 0.0
     lo, hi = 0.0, 1.0 - 1.0 / K
+
     def g(p):
         return binary_entropy_bits(p) + p * math.log2(K - 1) - target
+
     if g(hi) < 0:
         return hi
     for _ in range(60):
@@ -28,12 +32,14 @@ def fano_error_upper_bound(I_bits, K=10, H_Y_bits=None, tol=1e-7):
             break
     return 0.5 * (lo + hi)
 
+
 def fano_upper_accuracy_from_I(I_bits_values, K=10, H_Y_bits=None):
     accs = []
     for I_bits in I_bits_values:
         Pe = fano_error_upper_bound(I_bits, K=K, H_Y_bits=H_Y_bits)
         accs.append(1.0 - Pe)
     return np.array(accs, dtype=float)
+
 
 def pearson_r(a, b):
     a = np.asarray(a, dtype=float)
@@ -46,9 +52,11 @@ def pearson_r(a, b):
         return float("nan")
     return float(np.corrcoef(a, b)[0, 1])
 
+
 def load_results(path):
     with open(path, "r") as f:
         return json.load(f)
+
 
 def corr_pruning(prune_results):
     decoder_set = set()
@@ -74,8 +82,10 @@ def corr_pruning(prune_results):
     decoder_names = sorted(list(decoder_set))
     return strategy_rows, decoder_names
 
+
 def escape_latex(s):
     return s.replace("_", "\\_")
+
 
 def latex_table_pruning(strategy_rows, decoder_names):
     cols = "l" + "c" * len(decoder_names)
@@ -100,12 +110,14 @@ def latex_table_pruning(strategy_rows, decoder_names):
     lines.append("\\end{tabular}")
     return "\n".join(lines)
 
+
 def corr_quant(quant_results):
     theo = fano_upper_accuracy_from_I(quant_results["izy"])
     rows = {}
     for dec_name, acc_list in quant_results["accs"].items():
         rows[dec_name] = pearson_r(theo, acc_list)
     return rows
+
 
 def latex_table_quant(rows):
     decoders = sorted(rows.keys())
@@ -122,9 +134,12 @@ def latex_table_quant(rows):
     lines.append("\\end{tabular}")
     return "\n".join(lines)
 
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--prune_json", type=str, default="results/pruning_all_layers.json")
+    parser.add_argument(
+        "--prune_json", type=str, default="results/pruning_all_layers.json"
+    )
     parser.add_argument("--quant_json", type=str, default="results/quant_analysis.json")
     args = parser.parse_args()
     prune_results = load_results(args.prune_json)
@@ -136,6 +151,7 @@ def main():
     print(pruning_table)
     print()
     print(quant_table)
+
 
 if __name__ == "__main__":
     main()

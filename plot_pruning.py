@@ -84,7 +84,6 @@ def main():
         )
         plt.close(fig)
 
-
         sort_idx = np.argsort(compr_arr)
         compr_sorted = compr_arr[sort_idx]
         ixz_sorted = ixz_arr[sort_idx]
