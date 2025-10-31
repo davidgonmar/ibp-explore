@@ -12,17 +12,37 @@ BATCH_SIZE = 1024
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MI_SAMPLE = 4096
 
-cfg = DictConfig({"dataset": {"name": "mnist", "size": 28, "num_channels": 1}})
 
+def get_test_and_mi_loaders(dsname="mnist"):
+    dsname = dsname.lower()
+    if dsname == "mnist":
+        transform = transforms.Compose(
+            [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
+        )
+        test_ds = datasets.MNIST(
+            "./data",
+            train=False,
+            download=True,
+            transform=transform,
+        )
+    elif dsname == "cifar10":
+        transform = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
+                ),
+            ]
+        )
+        test_ds = datasets.CIFAR10(
+            "./data",
+            train=False,
+            download=True,
+            transform=transform,
+        )
+    else:
+        raise ValueError(f"Unsupported dataset name: {dsname}")
 
-def get_test_and_mi_loaders():
-    transform = transforms.ToTensor()
-    test_ds = datasets.MNIST(
-        "./data",
-        train=False,
-        download=True,
-        transform=transform,
-    )
     test_loader = DataLoader(
         test_ds,
         batch_size=BATCH_SIZE,
@@ -52,7 +72,13 @@ def evaluate_accuracy(model, loader):
     return correct / total
 
 
-def estimate_IZY_and_IXZ(model, loader):
+def estimate_IZY_and_IXZ(model, dsname, loader):
+    if dsname.lower() == "mnist":
+        cfg = DictConfig({"dataset": {"name": "mnist", "size": 28, "num_channels": 1}})
+    elif dsname.lower() == "cifar10":
+        cfg = DictConfig(
+            {"dataset": {"name": "cifar10", "size": 32, "num_channels": 3}}
+        )
     return (
         estimate_mi_zy(model, loader, DEVICE, mi_config=None),
         estimate_mi_zx(model, loader, DEVICE, cfg, mi_config=None),

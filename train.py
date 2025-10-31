@@ -12,7 +12,9 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def main():
-    transform = transforms.ToTensor()
+    transform = transforms.Compose(
+        [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
+    )
     train_ds = datasets.MNIST("./data", train=True, download=True, transform=transform)
     train_loader = DataLoader(
         train_ds, batch_size=BATCH_SIZE, shuffle=True, drop_last=True
