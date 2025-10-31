@@ -77,7 +77,10 @@ def main():
     ax1.grid(True)
     ax1.legend(handles, labels_list, loc="best")
     fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, "accuracy_ixz_vs_config.png"))
+    fig.savefig(
+        os.path.join(out_dir, "accuracy_ixz_vs_config.pdf"),
+        format="pdf",
+    )
     plt.close(fig)
 
     sort_idx = np.argsort(compr_arr)
@@ -129,7 +132,10 @@ def main():
     ax1.grid(True)
     ax1.legend(handles, labels_list, loc="best")
     fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, "accuracy_ixz_vs_compression_ratio.png"))
+    fig.savefig(
+        os.path.join(out_dir, "accuracy_ixz_vs_compression_ratio.pdf"),
+        format="pdf",
+    )
     plt.close(fig)
 
 

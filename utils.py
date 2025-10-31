@@ -10,7 +10,7 @@ from mutual_info.estimate_mi import estimate_mi_zy, estimate_mi_zx
 
 BATCH_SIZE = 1024
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-MI_SAMPLE = 4096
+MI_SAMPLE = 9192
 
 
 def get_test_and_mi_loaders(dsname="mnist"):

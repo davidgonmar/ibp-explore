@@ -74,13 +74,16 @@ def main():
         ax1.grid(True)
         ax1.legend(handles, labels)
         fig.tight_layout()
+
         fig.savefig(
             os.path.join(
                 out_dir,
-                f"accuracy_ixz_vs_prune_ratio_{strategy_name}.png",
-            )
+                f"accuracy_ixz_vs_prune_ratio_{strategy_name}.pdf",
+            ),
+            format="pdf",
         )
         plt.close(fig)
+
 
         sort_idx = np.argsort(compr_arr)
         compr_sorted = compr_arr[sort_idx]
@@ -131,11 +134,13 @@ def main():
         ax1.grid(True)
         ax1.legend(handles, labels)
         fig.tight_layout()
+
         fig.savefig(
             os.path.join(
                 out_dir,
-                f"accuracy_ixz_vs_compression_ratio_{strategy_name}.png",
-            )
+                f"accuracy_ixz_vs_compression_ratio_{strategy_name}.pdf",
+            ),
+            format="pdf",
         )
         plt.close(fig)
 
