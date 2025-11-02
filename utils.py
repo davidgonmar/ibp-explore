@@ -81,7 +81,7 @@ def estimate_IZY_and_IXZ(model, dsname, loader):
         )
     return (
         estimate_mi_zy(model, loader, DEVICE, mi_config=None),
-        estimate_mi_zx(model, loader, DEVICE, cfg, mi_config=None),
+        estimate_mi_zx(model, loader, DEVICE, cfg, mi_configx=None, mi_configz=None),
     )
 
 
@@ -246,7 +246,7 @@ def evaluate_with_classifier(
         opt = torch.optim.Adam(clf.parameters(), lr=1e-2)
         loss_fn = torch.nn.CrossEntropyLoss()
         clf.train()
-        for _ in range(5):
+        for _ in range(10):
             opt.zero_grad()
             logits = clf(X)
             loss = loss_fn(logits, Y)
