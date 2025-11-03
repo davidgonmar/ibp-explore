@@ -1,4 +1,6 @@
-import argparse, json, math
+import argparse
+import json
+import math
 import numpy as np
 
 
@@ -135,22 +137,82 @@ def latex_table_quant(rows):
     return "\n".join(lines)
 
 
+def corr_factorization(factor_results):
+    methods_dict = factor_results.get("methods", factor_results)
+    decoder_set = set()
+    method_rows = []
+    pooled = {}
+    for method_name, method_info in methods_dict.items():
+        theo = fano_upper_accuracy_from_I(method_info["izy"])
+        row = {}
+        for dec_name, acc_list in method_info["accs"].items():
+            acc_arr = np.asarray(acc_list, dtype=float)
+            r = pearson_r(theo, acc_arr)
+            row[dec_name] = r
+            decoder_set.add(dec_name)
+            if dec_name not in pooled:
+                pooled[dec_name] = {"theo": [], "acc": []}
+            pooled[dec_name]["theo"].extend(theo.tolist())
+            pooled[dec_name]["acc"].extend(acc_arr.tolist())
+        method_rows.append((method_name, row))
+    pooled_row = {}
+    for dec_name, both in pooled.items():
+        pooled_row[dec_name] = pearson_r(both["theo"], both["acc"])
+    method_rows.append(("ALL", pooled_row))
+    decoder_names = sorted(list(decoder_set))
+    return method_rows, decoder_names
+
+
+def latex_table_factorization(method_rows, decoder_names):
+    cols = "l" + "c" * len(decoder_names)
+    lines = []
+    lines.append("\\begin{tabular}{" + cols + "}")
+    lines.append("\\hline")
+    header = "Method"
+    for dec in decoder_names:
+        header += " & " + escape_latex(dec)
+    header += " \\\\"
+    lines.append(header)
+    lines.append("\\hline")
+    for method_name, row in method_rows:
+        line = escape_latex(method_name)
+        for dec in decoder_names:
+            r = row.get(dec, float("nan"))
+            cell = "--" if math.isnan(r) else f"{r:.4f}"
+            line += " & " + cell
+        line += " \\\\"
+        lines.append(line)
+    lines.append("\\hline")
+    lines.append("\\end{tabular}")
+    return "\n".join(lines)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--prune_json", type=str, default="results/pruning_all_layers.json"
     )
     parser.add_argument("--quant_json", type=str, default="results/quant_analysis.json")
+    parser.add_argument(
+        "--factor_json",
+        type=str,
+        default="results/factorization_analysis_resnet20.json",
+    )
     args = parser.parse_args()
     prune_results = load_results(args.prune_json)
     quant_results = load_results(args.quant_json)
+    factor_results = load_results(args.factor_json)
     strategy_rows, decoder_names = corr_pruning(prune_results)
     pruning_table = latex_table_pruning(strategy_rows, decoder_names)
     quant_rows = corr_quant(quant_results)
     quant_table = latex_table_quant(quant_rows)
+    method_rows, decoder_names_factor = corr_factorization(factor_results)
+    factor_table = latex_table_factorization(method_rows, decoder_names_factor)
     print(pruning_table)
     print()
     print(quant_table)
+    print()
+    print(factor_table)
 
 
 if __name__ == "__main__":

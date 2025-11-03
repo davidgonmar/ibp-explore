@@ -25,3 +25,8 @@ python plot_pruning.py \
 python plot_pruning.py \
   --input_json results/pruning_all_layers_resnet20.json \
   --out_dir plots/pruning_resnet20
+
+
+python plot_factorization.py \
+  --input_json results/factorization_analysis_resnet20.json \
+  --out_dir plots/factorization_resnet20

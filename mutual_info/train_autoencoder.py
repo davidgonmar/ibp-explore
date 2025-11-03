@@ -17,7 +17,7 @@ logger.setLevel(logging.INFO)
 
 @dataclass
 class MIEstimationCompressionConfig:
-    latent_dim: int = 4
+    latent_dim: int = 6
     num_epochs: int = 200  # Number of epochs for training the autoencoder.
     batch_size: int = 256  # Batch size for training the autoencoder.
     optimizer: str = "adam"  # Following the original code.
