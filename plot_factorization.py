@@ -75,12 +75,69 @@ def main():
         )
         plt.close(fig)
 
+        # --- Accuracy vs Compression plot (similar to plot_pruning style) ---
+        compr_list = mres.get("compr", [])
+        if compr_list:
+            compr_arr = np.array(compr_list[1:])  # Skip first element like izy_arr
+
+            # Calculate Fano bound for the main accuracy plot
+            theo_acc_compr = fano_upper_accuracy_from_I(
+                izy_arr,
+                K=10,
+                H_Y_bits=math.log2(10),
+            )
+            theo_pct_compr = 100.0 * np.array(theo_acc_compr)
+
+            sort_idx_compr = np.argsort(compr_arr)
+            compr_sorted = compr_arr[sort_idx_compr]
+            theo_sorted_compr = theo_pct_compr[sort_idx_compr]
+
+            fig_compr, ax1_compr = plt.subplots(figsize=(12, 8))
+
+            handles_compr = []
+            labels_list_compr = []
+
+            for probe_name, probe_acc_list in accs_full.items():
+                probe_acc_arr = np.array(probe_acc_list)[1:]
+                probe_acc_pct = 100.0 * probe_acc_arr
+                probe_acc_sorted = probe_acc_pct[sort_idx_compr]
+                (h_probe,) = ax1_compr.plot(
+                    compr_sorted,
+                    probe_acc_sorted,
+                    marker="o",
+                    label=f"{probe_name} Accuracy (%)",
+                )
+                handles_compr.append(h_probe)
+                labels_list_compr.append(f"{probe_name} Accuracy (%)")
+
+            (h_theo,) = ax1_compr.plot(
+                compr_sorted,
+                theo_sorted_compr,
+                marker="s",
+                label="Fano Upper Bound (%)",
+            )
+            handles_compr.append(h_theo)
+            labels_list_compr.append("Fano Upper Bound (%)")
+
+            ax1_compr.set_xlabel("Compression Ratio")
+            ax1_compr.set_ylabel("Accuracy (%)")
+            ax1_compr.set_title(f"{method_name}: Accuracy vs Compression")
+            ax1_compr.grid(True)
+            ax1_compr.legend(handles_compr, labels_list_compr, loc="best")
+
+            fig_compr.tight_layout()
+            fig_compr.savefig(
+                os.path.join(args.out_dir, f"accuracy_vs_compr_{method_name}.pdf"),
+                format="pdf",
+            )
+            plt.close(fig_compr)
+
         # --- Collage of FANO/per-class-accuracy plots ---
         # Plot per-class Fano upper bound (k=2) vs per_class_differentiate accuracy for ALL classes in a single collage PDF
 
         per_class_binary_info_list = mres.get("per_class_binary_info", [])
         accs_per_class_differentiate_dict = mres.get("accs_per_class_differentiate", {})
-        compr_list = mres.get("compr", [])
+        # compr_list already defined above
 
         # Handle both old format (list) and new format (dict by decoder)
         if isinstance(accs_per_class_differentiate_dict, list):

@@ -237,7 +237,7 @@ def evaluate_with_classifier(
 
     if not isinstance(classifiers, (list, tuple)):
         classifiers = [classifiers]
-    NOISE = 0.95
+    NOISE = 0.0
     for spec in classifiers:
         name, clf = build_classifier(spec, X.size(1), num_classes)
         opt = torch.optim.Adam(clf.parameters(), lr=1e-2)
