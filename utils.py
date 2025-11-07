@@ -237,7 +237,7 @@ def evaluate_with_classifier(
 
     if not isinstance(classifiers, (list, tuple)):
         classifiers = [classifiers]
-
+    NOISE = 0.95
     for spec in classifiers:
         name, clf = build_classifier(spec, X.size(1), num_classes)
         opt = torch.optim.Adam(clf.parameters(), lr=1e-2)
@@ -246,7 +246,14 @@ def evaluate_with_classifier(
         for _ in range(10):
             opt.zero_grad()
             logits = clf(X)
-            loss = loss_fn(logits, Y)
+            # add noise to Y
+            _Y = torch.where(
+                torch.rand(Y.size(0), device=Y.device)
+                < torch.tensor(NOISE, device=Y.device),
+                torch.randint(0, num_classes, (Y.size(0),), device=Y.device),
+                Y,
+            )
+            loss = loss_fn(logits, _Y)
             loss.backward()
             opt.step()
         clf.eval()
