@@ -21,6 +21,7 @@ from utils import (
     evaluate_with_classifier,
     estimate_IZY_and_IXZ,
     save_results_json,
+    accuracy_class_differentiate_with_classifiers,
 )
 from models import resnet20
 
@@ -132,7 +133,7 @@ def main():
         classifiers=["linear", "mlp"],
         num_classes=10,
     )
-    I_ZY_base, I_XZ_base = estimate_IZY_and_IXZ(
+    (I_ZY_base, per_class_binary_info_base), I_XZ_base = estimate_IZY_and_IXZ(
         base_model,
         args.dataset,
         mi_loader,
@@ -151,8 +152,19 @@ def main():
 
         labels = ["original"]
         izy_list = [I_ZY_base]
+        per_class_binary_info_list = [per_class_binary_info_base]
         ixz_list = [I_XZ_base]
         compr_list = [1.0]
+        accs_per_class_differentiate_by_decoder = (
+            accuracy_class_differentiate_with_classifiers(
+                base_model, test_loader, classifiers=["linear", "mlp"], num_classes=10
+            )
+        )
+        # Initialize lists for each decoder
+        for dec_name in accs_per_class_differentiate_by_decoder.keys():
+            accs_per_class_differentiate_by_decoder[dec_name] = [
+                accs_per_class_differentiate_by_decoder[dec_name]
+            ]
         accs_by_decoder = {}
         for dec_name, info in eval_base.items():
             accs_by_decoder[dec_name] = [info["accuracy"]]
@@ -186,7 +198,7 @@ def main():
                 classifiers=["linear", "mlp"],
                 num_classes=10,
             )
-            I_ZY, I_XZ = estimate_IZY_and_IXZ(
+            (I_ZY, per_class_binary_info_lr), I_XZ = estimate_IZY_and_IXZ(
                 model_lr,
                 args.dataset,
                 mi_loader,
@@ -196,7 +208,7 @@ def main():
             izy_list.append(I_ZY)
             ixz_list.append(I_XZ)
             compr_list.append(compr_val)
-
+            per_class_binary_info_list.append(per_class_binary_info_lr)
             for dec_name, info in eval_lr.items():
                 if dec_name not in accs_by_decoder:
                     accs_by_decoder[dec_name] = []
@@ -210,12 +222,31 @@ def main():
                 f"[method={method} | ratio={ratio:.6f}] {acc_print} | I(Z;Y): {I_ZY:7.3f} bits | I(X;Z): {I_XZ:7.3f} bits | compr={compr_val:.4f}"
             )
 
+            # save per class binary info
+
+            # print(per_class_binary_info_list[-1])
+
+            accs_per_class_differentiate_lr = (
+                accuracy_class_differentiate_with_classifiers(
+                    model_lr, test_loader, classifiers=["linear", "mlp"], num_classes=10
+                )
+            )
+
+            for dec_name, per_class_errors in accs_per_class_differentiate_lr.items():
+                if dec_name not in accs_per_class_differentiate_by_decoder:
+                    accs_per_class_differentiate_by_decoder[dec_name] = []
+                accs_per_class_differentiate_by_decoder[dec_name].append(
+                    per_class_errors
+                )
+
         results[method] = {
             "labels": labels,
             "accs": accs_by_decoder,
             "izy": izy_list,
+            "per_class_binary_info": per_class_binary_info_list,
             "ixz": ixz_list,
             "compr": compr_list,
+            "accs_per_class_differentiate": accs_per_class_differentiate_by_decoder,
         }
 
     final_out = {"methods": results}

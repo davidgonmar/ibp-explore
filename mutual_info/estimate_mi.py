@@ -245,7 +245,7 @@ def estimate_mi_zy(
     device: torch.device,
     mi_config: MIEstimationCompressionConfig = None,
     use_autoencoder: bool = True,
-) -> float:
+) -> tuple[float, dict]:
     if mi_config is None:
         mi_config = MIEstimationCompressionConfig()
     model.eval()
@@ -290,4 +290,5 @@ def estimate_mi_zy(
     )
     return mi_zy_estimator.fit_estimate(z_compressed, targets) * math.log2(
         math.e
-    )  # nats to bits
+    ), mi_zy_estimator.estimate_per_class_differentiator_things(z_compressed, targets)
+    # nats to bits

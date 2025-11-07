@@ -579,3 +579,98 @@ class MIEstimator:
             h_x_y -= frequencies_x_y[x_y] * np.log(frequencies_x_y[x_y])
 
         return (h_x + h_y - h_x_y, 0.0)
+
+    def estimate_per_class_differentiator_things(
+        self, x: NDArray[Any] | Tensor, y: NDArray[Any] | Tensor, balance: bool = True
+    ) -> tuple[float, float]:
+        if isinstance(y, Tensor):
+            y = y.detach().cpu().numpy()
+        else:
+            y = np.asarray(y)
+        if isinstance(x, Tensor):
+            x = x.detach().cpu().numpy()
+        else:
+            x = np.asarray(x)
+
+        diffclasses = np.unique(y)
+        nc = len(diffclasses)
+        # from Y, we want to construct nc lists, each with labels 1 if element i is in class j, 0 otherwise.
+        y_class_labels = np.zeros((y.shape[0], nc))
+        for i in range(y.shape[0]):
+            for j in range(nc):
+                if y[i] == diffclasses[j]:
+                    y_class_labels[i, j] = 1
+                else:
+                    y_class_labels[i, j] = 0
+
+        # now, estimate entropy of x
+        h_x, h_x_err = self._x_entropy_estimator.estimate(x)
+
+        # and estimate conds for each binary classifier with x mid y
+        h_x_mid_y_list_0 = []
+        h_x_mid_y_err_list_0 = []
+        h_x_mid_y_list_1 = []
+        h_x_mid_y_err_list_1 = []
+        prob_0s_list = []
+
+        for j in range(nc):
+            # masks / indices
+            mask1 = y_class_labels[:, j] == 1
+            mask0 = ~mask1
+
+            if balance:
+                idx1 = np.flatnonzero(mask1)
+                idx0 = np.flatnonzero(mask0)
+                m = min(len(idx1), len(idx0))
+                if m > 0:
+                    sel1 = np.random.choice(idx1, size=m, replace=False)
+                    sel0 = np.random.choice(idx0, size=m, replace=False)
+                    x1 = x[sel1]
+                    x0 = x[sel0]
+                    p0 = 0.5  # balanced prior
+                else:
+                    # fallback to unbalanced if one side is empty
+                    x1 = x[mask1]
+                    x0 = x[mask0]
+                    p0 = np.mean(mask0)
+            else:
+                x1 = x[mask1]
+                x0 = x[mask0]
+                p0 = np.mean(mask0)
+
+            # refit estimator. We need for y = 0 and y = 1
+            x_mid_y_entropy_estimator_0 = EntropyEstimator(
+                **self.entropy_estimator_params,
+            )
+            x_mid_y_entropy_estimator_0.fit(x0)
+            h_x_mid_y_0, h_x_mid_y_err_0 = x_mid_y_entropy_estimator_0.estimate(x0)
+
+            x_mid_y_entropy_estimator_1 = EntropyEstimator(
+                **self.entropy_estimator_params,
+            )
+            x_mid_y_entropy_estimator_1.fit(x1)
+            h_x_mid_y_1, h_x_mid_y_err_1 = x_mid_y_entropy_estimator_1.estimate(x1)
+
+            h_x_mid_y_list_0.append(h_x_mid_y_0)
+            h_x_mid_y_err_list_0.append(h_x_mid_y_err_0)
+            h_x_mid_y_list_1.append(h_x_mid_y_1)
+            h_x_mid_y_err_list_1.append(h_x_mid_y_err_1)
+
+            prob_0s_list.append(p0)
+
+        # we can now obtain h_x_mid_w_k where w_k is the binary classifier for class k.
+        h_x_mid_w_k = np.array(h_x_mid_y_list_0) * np.array(prob_0s_list) + np.array(
+            h_x_mid_y_list_1
+        ) * (1 - np.array(prob_0s_list))
+        h_x_mid_w_k_err = 0  # TODO: implement error calculation
+
+        # dictr with classes
+        return {
+            int(j): {
+                "h_x_mid_w_k": float(h_x_mid_w_k[j])
+                * math.log2(math.e),  # nats to bits
+                "I_x_w_k": float(h_x - h_x_mid_w_k[j]) * math.log2(math.e),
+                "h_x_mid_w_k_err": 0,  # TODO: implement error calculation
+            }
+            for j in range(nc)
+        }
