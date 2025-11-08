@@ -246,6 +246,45 @@ def main():
         for dec_name, info in eval_base.items():
             accs_by_decoder[dec_name] = [info["accuracy"]]
 
+        # Curves needed for pre- and post-retrain acc vs compr
+        acc_vs_compr_curves = (
+            {}
+        )  # this will store "before" and "after" for each classifier
+        for classifier_name in eval_base.keys():
+            acc_vs_compr_curves[classifier_name] = {"before": [], "after": []}
+        retrain_ratios = []
+
+        # Initialize before and after retrain lists
+        labels_before = ["original"]
+        izy_list_before = [I_ZY_base]
+        per_class_binary_info_list_before = [per_class_binary_info_base]
+        ixz_list_before = [I_XZ_base]
+        compr_list_before = [1.0]
+        accs_by_decoder_before = {}
+        for dec_name, info in eval_base.items():
+            accs_by_decoder_before[dec_name] = [info["accuracy"]]
+            acc_vs_compr_curves[dec_name]["before"].append(info["accuracy"])
+        accs_per_class_differentiate_by_decoder_before = {}
+        for dec_name in accs_per_class_differentiate_by_decoder.keys():
+            accs_per_class_differentiate_by_decoder_before[dec_name] = [
+                accs_per_class_differentiate_by_decoder[dec_name]
+            ]
+
+        labels_after = ["original"]
+        izy_list_after = [I_ZY_base]
+        per_class_binary_info_list_after = [per_class_binary_info_base]
+        ixz_list_after = [I_XZ_base]
+        compr_list_after = [1.0]
+        accs_by_decoder_after = {}
+        for dec_name, info in eval_base.items():
+            accs_by_decoder_after[dec_name] = [info["accuracy"]]
+            acc_vs_compr_curves[dec_name]["after"].append(info["accuracy"])
+        accs_per_class_differentiate_by_decoder_after = {}
+        for dec_name in accs_per_class_differentiate_by_decoder.keys():
+            accs_per_class_differentiate_by_decoder_after[dec_name] = [
+                accs_per_class_differentiate_by_decoder[dec_name]
+            ]
+
         parts = []
         for dec_name, info in eval_base.items():
             parts.append(f"{dec_name} Acc: {info['accuracy'] * 100:6.2f}%")
@@ -266,6 +305,61 @@ def main():
             model_lr = model_lr.to(DEVICE)
             model_lr.eval()
 
+            # Evaluate BEFORE retraining
+            params_lr = _count_params(model_lr)
+            compr_val = params_lr / params_orig
+
+            eval_lr_before = evaluate_with_classifier(
+                model_lr,
+                test_loader,
+                classifiers=["linear", "mlp"],
+                num_classes=10,
+            )
+            (I_ZY_before, per_class_binary_info_lr_before), I_XZ_before = (
+                estimate_IZY_and_IXZ(
+                    model_lr,
+                    args.dataset,
+                    mi_loader,
+                )
+            )
+
+            accs_per_class_differentiate_lr_before = (
+                accuracy_class_differentiate_with_classifiers(
+                    model_lr, test_loader, classifiers=["linear", "mlp"], num_classes=10
+                )
+            )
+
+            # Store BEFORE retraining metrics
+            labels_before.append(f"{ratio:.6f}")
+            izy_list_before.append(I_ZY_before)
+            ixz_list_before.append(I_XZ_before)
+            compr_list_before.append(compr_val)
+            per_class_binary_info_list_before.append(per_class_binary_info_lr_before)
+            for dec_name, info in eval_lr_before.items():
+                if dec_name not in accs_by_decoder_before:
+                    accs_by_decoder_before[dec_name] = []
+                accs_by_decoder_before[dec_name].append(info["accuracy"])
+                acc_vs_compr_curves[dec_name]["before"].append(info["accuracy"])
+
+            for (
+                dec_name,
+                per_class_errors,
+            ) in accs_per_class_differentiate_lr_before.items():
+                if dec_name not in accs_per_class_differentiate_by_decoder_before:
+                    accs_per_class_differentiate_by_decoder_before[dec_name] = []
+                accs_per_class_differentiate_by_decoder_before[dec_name].append(
+                    per_class_errors
+                )
+
+            parts_before = []
+            for dec_name, info in eval_lr_before.items():
+                parts_before.append(f"{dec_name} Acc: {info['accuracy'] * 100:6.2f}%")
+            acc_print_before = " | ".join(parts_before)
+            print(
+                f"[method={method} | ratio={ratio:.6f} | BEFORE retrain] {acc_print_before} | I(Z;Y): {I_ZY_before:7.3f} bits | I(X;Z): {I_XZ_before:7.3f} bits | compr={compr_val:.4f}"
+            )
+
+            # Retrain the model
             model_lr = _retrain_model(
                 model_lr,
                 retrain_loader,
@@ -274,51 +368,79 @@ def main():
                 args.retrain_label_noise,
             )
 
-            params_lr = _count_params(model_lr)
-            compr_val = params_lr / params_orig
-
-            eval_lr = evaluate_with_classifier(
+            # Evaluate AFTER retraining
+            eval_lr_after = evaluate_with_classifier(
                 model_lr,
                 test_loader,
                 classifiers=["linear", "mlp"],
                 num_classes=10,
             )
-            (I_ZY, per_class_binary_info_lr), I_XZ = estimate_IZY_and_IXZ(
-                model_lr,
-                args.dataset,
-                mi_loader,
+            (I_ZY_after, per_class_binary_info_lr_after), I_XZ_after = (
+                estimate_IZY_and_IXZ(
+                    model_lr,
+                    args.dataset,
+                    mi_loader,
+                )
             )
 
-            labels.append(f"{ratio:.6f}")
-            izy_list.append(I_ZY)
-            ixz_list.append(I_XZ)
-            compr_list.append(compr_val)
-            per_class_binary_info_list.append(per_class_binary_info_lr)
-            for dec_name, info in eval_lr.items():
-                if dec_name not in accs_by_decoder:
-                    accs_by_decoder[dec_name] = []
-                accs_by_decoder[dec_name].append(info["accuracy"])
+            # Store AFTER retraining metrics
+            labels_after.append(f"{ratio:.6f}")
+            izy_list_after.append(I_ZY_after)
+            ixz_list_after.append(I_XZ_after)
+            compr_list_after.append(compr_val)
+            per_class_binary_info_list_after.append(per_class_binary_info_lr_after)
+            for dec_name, info in eval_lr_after.items():
+                if dec_name not in accs_by_decoder_after:
+                    accs_by_decoder_after[dec_name] = []
+                accs_by_decoder_after[dec_name].append(info["accuracy"])
+                acc_vs_compr_curves[dec_name]["after"].append(info["accuracy"])
 
-            parts = []
-            for dec_name, info in eval_lr.items():
-                parts.append(f"{dec_name} Acc: {info['accuracy'] * 100:6.2f}%")
-            acc_print = " | ".join(parts)
+            parts_after = []
+            for dec_name, info in eval_lr_after.items():
+                parts_after.append(f"{dec_name} Acc: {info['accuracy'] * 100:6.2f}%")
+            acc_print_after = " | ".join(parts_after)
             print(
-                f"[method={method} | ratio={ratio:.6f}] {acc_print} | I(Z;Y): {I_ZY:7.3f} bits | I(X;Z): {I_XZ:7.3f} bits | compr={compr_val:.4f}"
+                f"[method={method} | ratio={ratio:.6f} | AFTER retrain] {acc_print_after} | I(Z;Y): {I_ZY_after:7.3f} bits | I(X;Z): {I_XZ_after:7.3f} bits | compr={compr_val:.4f}"
             )
 
-            accs_per_class_differentiate_lr = (
+            accs_per_class_differentiate_lr_after = (
                 accuracy_class_differentiate_with_classifiers(
                     model_lr, test_loader, classifiers=["linear", "mlp"], num_classes=10
                 )
             )
 
-            for dec_name, per_class_errors in accs_per_class_differentiate_lr.items():
+            for (
+                dec_name,
+                per_class_errors,
+            ) in accs_per_class_differentiate_lr_after.items():
+                if dec_name not in accs_per_class_differentiate_by_decoder_after:
+                    accs_per_class_differentiate_by_decoder_after[dec_name] = []
+                accs_per_class_differentiate_by_decoder_after[dec_name].append(
+                    per_class_errors
+                )
+
+            # Keep the old lists for backward compatibility (using after retrain values)
+            labels.append(f"{ratio:.6f}")
+            izy_list.append(I_ZY_after)
+            ixz_list.append(I_XZ_after)
+            compr_list.append(compr_val)
+            per_class_binary_info_list.append(per_class_binary_info_lr_after)
+            for dec_name, info in eval_lr_after.items():
+                if dec_name not in accs_by_decoder:
+                    accs_by_decoder[dec_name] = []
+                accs_by_decoder[dec_name].append(info["accuracy"])
+
+            for (
+                dec_name,
+                per_class_errors,
+            ) in accs_per_class_differentiate_lr_after.items():
                 if dec_name not in accs_per_class_differentiate_by_decoder:
                     accs_per_class_differentiate_by_decoder[dec_name] = []
                 accs_per_class_differentiate_by_decoder[dec_name].append(
                     per_class_errors
                 )
+
+            retrain_ratios.append(compr_val)
 
         results[method] = {
             "labels": labels,
@@ -328,6 +450,28 @@ def main():
             "ixz": ixz_list,
             "compr": compr_list,
             "accs_per_class_differentiate": accs_per_class_differentiate_by_decoder,
+            # Before retraining metrics
+            "before_retrain": {
+                "labels": labels_before,
+                "accs": accs_by_decoder_before,
+                "izy": izy_list_before,
+                "per_class_binary_info": per_class_binary_info_list_before,
+                "ixz": ixz_list_before,
+                "compr": compr_list_before,
+                "accs_per_class_differentiate": accs_per_class_differentiate_by_decoder_before,
+            },
+            # After retraining metrics
+            "after_retrain": {
+                "labels": labels_after,
+                "accs": accs_by_decoder_after,
+                "izy": izy_list_after,
+                "per_class_binary_info": per_class_binary_info_list_after,
+                "ixz": ixz_list_after,
+                "compr": compr_list_after,
+                "accs_per_class_differentiate": accs_per_class_differentiate_by_decoder_after,
+            },
+            # Pre- and post-retrain accuracy vs compression curves
+            "acc_vs_compr_curves": acc_vs_compr_curves,
         }
 
     final_out = {"methods": results}
