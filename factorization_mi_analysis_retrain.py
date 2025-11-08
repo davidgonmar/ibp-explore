@@ -73,10 +73,51 @@ def _factorize_model(
     return model_lr
 
 
-def _retrain_model(model, train_loader, num_epochs, lr):
+def _retrain_model(model, train_loader, num_epochs, lr, label_noise):
     model = model.to(DEVICE)
     model.train()
+
+    if label_noise > 0.0:
+        base_ds = train_loader.dataset
+
+        if not hasattr(base_ds, "_noisy_labels"):
+            ys = []
+            for i in range(len(base_ds)):
+                _, yi = base_ds[i]
+                ys.append(yi)
+            clean = torch.tensor(ys, dtype=torch.long)
+            K = int(clean.max().item()) + 1
+            I = torch.eye(K, dtype=torch.float32)
+            T = (1.0 - label_noise) * I + (label_noise / (K - 1)) * (
+                torch.ones((K, K), dtype=torch.float32) - I
+            )
+            P = T[clean]
+            noisy = torch.multinomial(P, 1, replacement=True).squeeze(1)
+            base_ds._noisy_labels = noisy
+
+        class _NoisyWrapper(torch.utils.data.Dataset):
+            def __init__(self, base, noisy):
+                self.base = base
+                self.noisy = noisy
+
+            def __len__(self):
+                return len(self.base)
+
+            def __getitem__(self, idx):
+                x, _ = self.base[idx]
+                return x, int(self.noisy[idx])
+
+        train_loader = DataLoader(
+            _NoisyWrapper(base_ds, base_ds._noisy_labels),
+            batch_size=train_loader.batch_size,
+            shuffle=True,
+            num_workers=getattr(train_loader, "num_workers", 0),
+            pin_memory=getattr(train_loader, "pin_memory", False),
+            drop_last=getattr(train_loader, "drop_last", False),
+        )
+
     optimizer = optim.Adam(model.parameters(), lr=lr)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
     loss_fn = nn.CrossEntropyLoss()
 
     for epoch in range(num_epochs):
@@ -87,6 +128,7 @@ def _retrain_model(model, train_loader, num_epochs, lr):
             loss = loss_fn(logits, yb)
             loss.backward()
             optimizer.step()
+        scheduler.step()
 
     model.eval()
     return model
@@ -112,6 +154,7 @@ def main():
     parser.add_argument("--retrain_lr", type=float, default=1e-3)
     parser.add_argument("--retrain_batch_size", type=int, default=128)
     parser.add_argument("--retrain_size", type=int, default=5000)
+    parser.add_argument("--retrain_label_noise", type=float, default=0.0)
     args = parser.parse_args()
 
     seed_everything(args.seed)
@@ -224,7 +267,11 @@ def main():
             model_lr.eval()
 
             model_lr = _retrain_model(
-                model_lr, retrain_loader, args.retrain_epochs, args.retrain_lr
+                model_lr,
+                retrain_loader,
+                args.retrain_epochs,
+                args.retrain_lr,
+                args.retrain_label_noise,
             )
 
             params_lr = _count_params(model_lr)
