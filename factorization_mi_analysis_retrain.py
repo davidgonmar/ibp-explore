@@ -73,6 +73,9 @@ def _factorize_model(
     return model_lr
 
 
+NOISE_MODE = "simple"  # "fancy" or "simple"
+
+
 def _retrain_model(model, train_loader, num_epochs, lr, label_noise):
     model = model.to(DEVICE)
     model.train()
@@ -81,19 +84,35 @@ def _retrain_model(model, train_loader, num_epochs, lr, label_noise):
         base_ds = train_loader.dataset
 
         if not hasattr(base_ds, "_noisy_labels"):
-            ys = []
-            for i in range(len(base_ds)):
-                _, yi = base_ds[i]
-                ys.append(yi)
-            clean = torch.tensor(ys, dtype=torch.long)
-            K = int(clean.max().item()) + 1
-            I = torch.eye(K, dtype=torch.float32)
-            T = (1.0 - label_noise) * I + (label_noise / (K - 1)) * (
-                torch.ones((K, K), dtype=torch.float32) - I
-            )
-            P = T[clean]
-            noisy = torch.multinomial(P, 1, replacement=True).squeeze(1)
-            base_ds._noisy_labels = noisy
+            if NOISE_MODE == "fancy":
+                ys = []
+                for i in range(len(base_ds)):
+                    _, yi = base_ds[i]
+                    ys.append(yi)
+                clean = torch.tensor(ys, dtype=torch.long)
+                K = int(clean.max().item()) + 1
+                I = torch.eye(K, dtype=torch.float32)
+                T = (1.0 - label_noise) * I + (label_noise / (K - 1)) * (
+                    torch.ones((K, K), dtype=torch.float32) - I
+                )
+                P = T[clean]
+                noisy = torch.multinomial(P, 1, replacement=True).squeeze(1)
+                base_ds._noisy_labels = noisy
+            else:  # simple
+                # simply with probability x substitute by a random label
+                import random
+
+                ys = []
+                for i in range(len(base_ds)):
+                    _, yi = base_ds[i]
+                    ys.append(yi)
+                noisy = []
+                for yi in ys:
+                    if random.random() < label_noise:
+                        noisy.append(random.randint(0, 9))
+                    else:
+                        noisy.append(yi)
+                base_ds._noisy_labels = noisy
 
         class _NoisyWrapper(torch.utils.data.Dataset):
             def __init__(self, base, noisy):
@@ -116,7 +135,7 @@ def _retrain_model(model, train_loader, num_epochs, lr, label_noise):
             drop_last=getattr(train_loader, "drop_last", False),
         )
 
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
     loss_fn = nn.CrossEntropyLoss()
 
