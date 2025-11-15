@@ -8,10 +8,6 @@ from utils import load_results_json, fano_upper_accuracy_from_I
 
 
 def get_distinct_colors(n_lines):
-    """
-    Return a list of distinct colors for n_lines.
-    We use matplotlib's tab20, then tab20b, then tab20c if needed, then color cycle if still more needed.
-    """
     cmap_names = ["tab20", "tab20b", "tab20c"]
     all_colors = []
     for cmap_name in cmap_names:
@@ -25,7 +21,6 @@ def get_distinct_colors(n_lines):
             unique_colors.append(color)
             seen.add(color)
     if n_lines > len(unique_colors):
-        # fallback to color cycle
         prop_cycle_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
         while len(unique_colors) < n_lines:
             for c in prop_cycle_colors:
@@ -39,9 +34,8 @@ def get_distinct_colors(n_lines):
 
 
 def get_distinct_styles(n_lines, kind="main"):
-    # Each line gets a different color; linestyle/marker default
     colors = get_distinct_colors(n_lines)
-    linestyles = ["-"] * n_lines  # all solid by default
+    linestyles = ["-"] * n_lines
     markers = [
         "o",
         "s",
@@ -119,9 +113,7 @@ def main():
     methods = res["methods"]
 
     for method_name, mres in methods.items():
-        # Check if before_retrain and after_retrain data exists
         has_retrain_data = "before_retrain" in mres and "after_retrain" in mres
-
         if not has_retrain_data:
             print(
                 f"Warning: {method_name} does not have before_retrain/after_retrain data. Skipping."
@@ -131,38 +123,27 @@ def main():
         before_data = mres["before_retrain"]
         after_data = mres["after_retrain"]
 
-        # Get I(Z;Y) data
+        # --- Shared prep ---
         izy_before_full = np.array(before_data["izy"])
         izy_after_full = np.array(after_data["izy"])
         izy_before_arr = izy_before_full[1:]
         izy_after_arr = izy_after_full[1:]
 
-        # Calculate Fano bounds
         theo_acc_before = fano_upper_accuracy_from_I(
-            izy_before_arr,
-            K=10,
-            H_Y_bits=math.log2(10),
+            izy_before_arr, K=10, H_Y_bits=math.log2(10)
         )
         theo_pct_before = 100.0 * np.array(theo_acc_before)
-
         theo_acc_after = fano_upper_accuracy_from_I(
-            izy_after_arr,
-            K=10,
-            H_Y_bits=math.log2(10),
+            izy_after_arr, K=10, H_Y_bits=math.log2(10)
         )
         theo_pct_after = 100.0 * np.array(theo_acc_after)
 
-        # Sort by I(Z;Y)
         sort_idx_before = np.argsort(izy_before_arr)
         izy_sorted_before = izy_before_arr[sort_idx_before]
         theo_sorted_before = theo_pct_before[sort_idx_before]
-
         sort_idx_after = np.argsort(izy_after_arr)
         izy_sorted_after = izy_after_arr[sort_idx_after]
         theo_sorted_after = theo_pct_after[sort_idx_after]
-
-        # Plot: Accuracy vs I(Z;Y)
-        fig, ax1 = plt.subplots(figsize=(12, 8))
 
         accs_before = before_data["accs"]
         accs_after = after_data["accs"]
@@ -170,11 +151,12 @@ def main():
         n_lines_acc = len(probe_names) * 2 + 2
         probe_styles = get_distinct_styles(n_lines_acc)
 
+        # --- Plot Both Before/After In One Plot (as before) ---
+        fig, ax1 = plt.subplots(figsize=(12, 8))
         handles = []
         labels_list = []
 
         for i, probe_name in enumerate(probe_names):
-            # Each probe has two styles: before, after
             style_before = probe_styles[2 * i]
             style_after = probe_styles[2 * i + 1]
             probe_acc_before_arr = np.array(accs_before[probe_name])[1:]
@@ -183,7 +165,6 @@ def main():
             probe_acc_after_pct = 100.0 * probe_acc_after_arr
             probe_acc_sorted_before = probe_acc_before_pct[sort_idx_before]
             probe_acc_sorted_after = probe_acc_after_pct[sort_idx_after]
-
             (h_before,) = ax1.plot(
                 izy_sorted_before,
                 probe_acc_sorted_before,
@@ -207,7 +188,7 @@ def main():
                 [f"{probe_name} Acc (%) (Before)", f"{probe_name} Acc (%) (After)"]
             )
 
-        # Fano bounds get their own color, too
+        # Fano bounds
         style_fano_before = probe_styles[len(probe_names) * 2]
         style_fano_after = probe_styles[len(probe_names) * 2 + 1]
         (h_fano_before,) = ax1.plot(
@@ -243,12 +224,99 @@ def main():
         )
         plt.close(fig)
 
+        # --- Separate "Before Retrain" Plot ---
+        fig_before, ax1_before = plt.subplots(figsize=(12, 8))
+        handles_before = []
+        labels_before = []
+        for i, probe_name in enumerate(probe_names):
+            style_before = probe_styles[2 * i]
+            probe_acc_before_arr = np.array(accs_before[probe_name])[1:]
+            probe_acc_before_pct = 100.0 * probe_acc_before_arr
+            probe_acc_sorted_before = probe_acc_before_pct[sort_idx_before]
+            (h_probe,) = ax1_before.plot(
+                izy_sorted_before,
+                probe_acc_sorted_before,
+                label=f"{probe_name} Acc (%)",
+                color=style_before["color"],
+                linestyle=style_before["linestyle"],
+                marker=style_before["marker"],
+                linewidth=2,
+            )
+            handles_before.append(h_probe)
+            labels_before.append(f"{probe_name} Acc (%)")
+
+        (h_fano,) = ax1_before.plot(
+            izy_sorted_before,
+            theo_sorted_before,
+            label="Fano Bound (%)",
+            color=style_fano_before["color"],
+            linestyle=style_fano_before["linestyle"],
+            marker=style_fano_before["marker"],
+            linewidth=2,
+        )
+        handles_before.append(h_fano)
+        labels_before.append("Fano Bound (%)")
+        ax1_before.set_xlabel("I(Z;Y) (bits)")
+        ax1_before.set_ylabel("Accuracy (%)")
+        ax1_before.set_title(f"{method_name}: Accuracy vs I(Z;Y) (Before Retrain)")
+        ax1_before.grid(True)
+        ax1_before.legend(handles_before, labels_before, loc="best")
+        fig_before.tight_layout()
+        fig_before.savefig(
+            os.path.join(args.out_dir, f"accuracy_vs_izy_{method_name}_before.pdf"),
+            format="pdf",
+        )
+        plt.close(fig_before)
+
+        # --- Separate "After Retrain" Plot ---
+        fig_after, ax1_after = plt.subplots(figsize=(12, 8))
+        handles_after = []
+        labels_after = []
+        for i, probe_name in enumerate(probe_names):
+            style_after = probe_styles[2 * i + 1]
+            probe_acc_after_arr = np.array(accs_after[probe_name])[1:]
+            probe_acc_after_pct = 100.0 * probe_acc_after_arr
+            probe_acc_sorted_after = probe_acc_after_pct[sort_idx_after]
+            (h_probe,) = ax1_after.plot(
+                izy_sorted_after,
+                probe_acc_sorted_after,
+                label=f"{probe_name} Acc (%)",
+                color=style_after["color"],
+                linestyle=style_after["linestyle"],
+                marker=style_after["marker"],
+                linewidth=2,
+            )
+            handles_after.append(h_probe)
+            labels_after.append(f"{probe_name} Acc (%)")
+        (h_fano,) = ax1_after.plot(
+            izy_sorted_after,
+            theo_sorted_after,
+            label="Fano Bound (%)",
+            color=style_fano_after["color"],
+            linestyle=style_fano_after["linestyle"],
+            marker=style_fano_after["marker"],
+            linewidth=2,
+        )
+        handles_after.append(h_fano)
+        labels_after.append("Fano Bound (%)")
+        ax1_after.set_xlabel("I(Z;Y) (bits)")
+        ax1_after.set_ylabel("Accuracy (%)")
+        ax1_after.set_title(f"{method_name}: Accuracy vs I(Z;Y) (After Retrain)")
+        ax1_after.grid(True)
+        ax1_after.legend(handles_after, labels_after, loc="best")
+        fig_after.tight_layout()
+        fig_after.savefig(
+            os.path.join(args.out_dir, f"accuracy_vs_izy_{method_name}_after.pdf"),
+            format="pdf",
+        )
+        plt.close(fig_after)
+
         # --- Accuracy vs Compression plot ---
         compr_list_before = before_data.get("compr", [])
         compr_list_after = after_data.get("compr", [])
 
         if compr_list_before and compr_list_after:
-            compr_arr = np.array(compr_list_before[1:])  # Should be identical
+            compr_arr = np.array(compr_list_before[1:])
 
             theo_acc_compr_before = fano_upper_accuracy_from_I(
                 izy_before_arr,
@@ -272,10 +340,10 @@ def main():
             n_lines_compr = len(probe_names) * 2 + 2
             probe_styles_compr = get_distinct_styles(n_lines_compr)
 
+            # Plot combined (before/after) accuracy vs compression, as before
             fig_compr, ax1_compr = plt.subplots(figsize=(12, 8))
             handles_compr = []
             labels_list_compr = []
-
             for i, probe_name in enumerate(probe_names):
                 style_before = probe_styles_compr[2 * i]
                 style_after = probe_styles_compr[2 * i + 1]
@@ -355,7 +423,104 @@ def main():
             )
             plt.close(fig_compr)
 
-        # --- Per-class Fano/per-class-accuracy plots ---
+            # --- Separate "Before Retrain" Accuracy vs Compression Plot ---
+            fig_compr_before, ax1_compr_before = plt.subplots(figsize=(12, 8))
+            handles_cbefore = []
+            labels_cbefore = []
+            for i, probe_name in enumerate(probe_names):
+                style_before = probe_styles_compr[2 * i]
+                probe_acc_before_arr = np.array(accs_before[probe_name])[1:]
+                probe_acc_before_pct = 100.0 * probe_acc_before_arr
+                probe_acc_sorted_before = probe_acc_before_pct[sort_idx_compr]
+                (h_probe,) = ax1_compr_before.plot(
+                    compr_sorted,
+                    probe_acc_sorted_before,
+                    label=f"{probe_name} Accuracy (%)",
+                    color=style_before["color"],
+                    linestyle=style_before["linestyle"],
+                    marker=style_before["marker"],
+                    linewidth=2,
+                )
+                handles_cbefore.append(h_probe)
+                labels_cbefore.append(f"{probe_name} Accuracy (%)")
+
+            (h_fano,) = ax1_compr_before.plot(
+                compr_sorted,
+                theo_sorted_compr_before,
+                label="Fano Bound (%)",
+                color=style_fano_before["color"],
+                linestyle=style_fano_before["linestyle"],
+                marker=style_fano_before["marker"],
+                linewidth=2,
+            )
+            handles_cbefore.append(h_fano)
+            labels_cbefore.append("Fano Bound (%)")
+            ax1_compr_before.set_xlabel("Compression Ratio")
+            ax1_compr_before.set_ylabel("Accuracy (%)")
+            ax1_compr_before.set_title(
+                f"{method_name}: Accuracy vs Compression (Before Retrain)"
+            )
+            ax1_compr_before.grid(True)
+            ax1_compr_before.legend(handles_cbefore, labels_cbefore, loc="best")
+            fig_compr_before.tight_layout()
+            fig_compr_before.savefig(
+                os.path.join(
+                    args.out_dir, f"accuracy_vs_compr_{method_name}_before.pdf"
+                ),
+                format="pdf",
+            )
+            plt.close(fig_compr_before)
+
+            # --- Separate "After Retrain" Accuracy vs Compression Plot ---
+            fig_compr_after, ax1_compr_after = plt.subplots(figsize=(12, 8))
+            handles_cafter = []
+            labels_cafter = []
+            for i, probe_name in enumerate(probe_names):
+                style_after = probe_styles_compr[2 * i + 1]
+                probe_acc_after_arr = np.array(accs_after[probe_name])[1:]
+                probe_acc_after_pct = 100.0 * probe_acc_after_arr
+                probe_acc_sorted_after = probe_acc_after_pct[sort_idx_compr]
+                (h_probe,) = ax1_compr_after.plot(
+                    compr_sorted,
+                    probe_acc_sorted_after,
+                    label=f"{probe_name} Accuracy (%)",
+                    color=style_after["color"],
+                    linestyle=style_after["linestyle"],
+                    marker=style_after["marker"],
+                    linewidth=2,
+                )
+                handles_cafter.append(h_probe)
+                labels_cafter.append(f"{probe_name} Accuracy (%)")
+            (h_fano,) = ax1_compr_after.plot(
+                compr_sorted,
+                theo_sorted_compr_after,
+                label="Fano Bound (%)",
+                color=style_fano_after["color"],
+                linestyle=style_fano_after["linestyle"],
+                marker=style_fano_after["marker"],
+                linewidth=2,
+            )
+            handles_cafter.append(h_fano)
+            labels_cafter.append("Fano Bound (%)")
+            ax1_compr_after.set_xlabel("Compression Ratio")
+            ax1_compr_after.set_ylabel("Accuracy (%)")
+            ax1_compr_after.set_title(
+                f"{method_name}: Accuracy vs Compression (After Retrain)"
+            )
+            ax1_compr_after.grid(True)
+            ax1_compr_after.legend(handles_cafter, labels_cafter, loc="best")
+            fig_compr_after.tight_layout()
+            fig_compr_after.savefig(
+                os.path.join(
+                    args.out_dir, f"accuracy_vs_compr_{method_name}_after.pdf"
+                ),
+                format="pdf",
+            )
+            plt.close(fig_compr_after)
+
+        # --- The rest (per-class) unchanged ---
+        # Keep the per-class plots as in the original, or add separate before/after if desired.
+
         per_class_binary_info_list_before = before_data.get("per_class_binary_info", [])
         per_class_binary_info_list_after = after_data.get("per_class_binary_info", [])
         accs_per_class_differentiate_dict_before = before_data.get(
@@ -395,7 +560,6 @@ def main():
                 args.out_dir, f"per_class_fano_upper_{method_name}_collage.pdf"
             )
             pdf_pages = PdfPages(collage_pdf_path)
-
             fig_all, axes_all = plt.subplots(
                 nrows=nrows, ncols=ncols, figsize=(ncols * 5, nrows * 4), squeeze=False
             )
@@ -411,7 +575,7 @@ def main():
             all_styles_perclass = get_distinct_styles(len(decoder_names) * 2 + 2)
 
             for i, class_idx in enumerate(class_indices):
-                # Extract I(X;w_k) for before and after
+                # [exactly as original for combined per-class plots...]
                 i_x_w_k_list_before = []
                 for per_class_binary_info in per_class_binary_info_list_before:
                     if str(class_idx) in per_class_binary_info:
@@ -424,7 +588,6 @@ def main():
                         )
                     else:
                         i_x_w_k_list_before.append(0.0)
-
                 i_x_w_k_list_after = []
                 for per_class_binary_info in per_class_binary_info_list_after:
                     if str(class_idx) in per_class_binary_info:
@@ -442,11 +605,7 @@ def main():
                 i_x_w_k_arr_after = np.array(i_x_w_k_list_after[1:])
 
                 balance = True
-                ent = (
-                    -(0.1 * math.log2(0.1) + 0.9 * math.log2(0.9))
-                    if not balance
-                    else 1.0
-                )
+                ent = 1.0 if balance else -(0.1 * math.log2(0.1) + 0.9 * math.log2(0.9))
                 fano_acc_before = fano_upper_accuracy_from_I(
                     i_x_w_k_arr_before, K=2, H_Y_bits=ent
                 )
@@ -490,7 +649,6 @@ def main():
                     per_class_diff_by_decoder_before[decoder_name] = per_class_diff_pct[
                         sort_idx
                     ]
-
                 per_class_diff_by_decoder_after = {}
                 for (
                     decoder_name,
@@ -523,7 +681,6 @@ def main():
                 row = i // ncols
                 col = i % ncols
                 ax = axes_all[row][col]
-                # Fano styles
                 fano_style_before = all_styles_perclass[-2]
                 fano_style_after = all_styles_perclass[-1]
                 ax.plot(
@@ -544,8 +701,6 @@ def main():
                     linestyle=fano_style_after["linestyle"],
                     linewidth=2,
                 )
-
-                # Plot per-class differentiate accuracies; each has a unique color thanks to get_distinct_styles
                 for j, decoder_name in enumerate(decoder_names):
                     style_before = (
                         all_styles_perclass[2 * j]
@@ -557,7 +712,6 @@ def main():
                         if 2 * j + 1 < len(all_styles_perclass)
                         else {"color": "gray", "linestyle": "--", "marker": "s"}
                     )
-                    # Not all decoders present in both before/after: guard
                     if decoder_name in per_class_diff_by_decoder_before:
                         ax.plot(
                             compr_sorted,
@@ -596,7 +750,6 @@ def main():
                 if row == 0 and col == 0:
                     ax.legend(fontsize=7, loc="best")
 
-            # Remove unused axes
             for j in range(n_classes, nrows * ncols):
                 fig_all.delaxes(axes_all[j // ncols][j % ncols])
 
@@ -608,7 +761,7 @@ def main():
             pdf_pages.savefig(fig_all)
             plt.close(fig_all)
 
-            # Save individual pages for each class
+            # (Individual per-class pages unchanged)
             for i, class_idx in enumerate(class_indices):
                 i_x_w_k_list_before = []
                 for per_class_binary_info in per_class_binary_info_list_before:
@@ -640,11 +793,7 @@ def main():
                 i_x_w_k_arr_after = np.array(i_x_w_k_list_after[1:])
 
                 balance = True
-                ent = (
-                    -(0.1 * math.log2(0.1) + 0.9 * math.log2(0.9))
-                    if not balance
-                    else 1.0
-                )
+                ent = 1.0 if balance else -(0.1 * math.log2(0.1) + 0.9 * math.log2(0.9))
                 fano_acc_before = fano_upper_accuracy_from_I(
                     i_x_w_k_arr_before, K=2, H_Y_bits=ent
                 )
@@ -727,7 +876,6 @@ def main():
                 styles_single = get_distinct_styles(len(decoder_names_single) * 2 + 2)
 
                 fig, ax1 = plt.subplots(figsize=(7, 5))
-                # Fano styles
                 fano_style_before = styles_single[-2]
                 fano_style_after = styles_single[-1]
                 ax1.plot(
@@ -748,7 +896,6 @@ def main():
                     linestyle=fano_style_after["linestyle"],
                     linewidth=2,
                 )
-
                 for j, decoder_name in enumerate(decoder_names_single):
                     style_before = (
                         styles_single[2 * j]

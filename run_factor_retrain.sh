@@ -35,11 +35,11 @@ python factorization_mi_analysis_retrain.py \
   --ratios 0.10 0.20 0.30 0.40 0.50 0.60 0.70 0.80 0.90 0.95 0.99 0.999 \
   --calib_size 1024 \
   --seed 0 \
-  --retrain_epochs 20 \
-  --retrain_lr 1e-2 \
+  --retrain_epochs 10 \
+  --retrain_lr 1e-3 \
   --retrain_batch_size 128 \
-  --retrain_size 5000 \
-  --retrain_label_noise 0.5
+  --retrain_size 50000 \
+  --retrain_label_noise 0.2
 
 python plot_factorization_retrain.py \
     --input_json results/factorization_analysis_resnet20_retrain_noise_0_8.json \

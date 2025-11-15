@@ -73,7 +73,7 @@ def _factorize_model(
     return model_lr
 
 
-NOISE_MODE = "simple"  # "fancy" or "simple"
+NOISE_MODE = "fancy"  # "fancy" or "simple"
 
 
 def _retrain_model(model, train_loader, num_epochs, lr, label_noise):
@@ -135,8 +135,8 @@ def _retrain_model(model, train_loader, num_epochs, lr, label_noise):
             drop_last=getattr(train_loader, "drop_last", False),
         )
 
-    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
+    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.95)
     loss_fn = nn.CrossEntropyLoss()
 
     for epoch in range(num_epochs):
